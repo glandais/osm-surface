@@ -5,9 +5,7 @@
 //! Shortbread reduces the `surface` tag to `paved` / `unpaved` (and drops `smoothness`,
 //! `mtb:scale`, `sac_scale`, `cycleway:*`, `foot`, `access`, `segregated`), so where Valhalla
 //! would read the exact OSM value, a fixed choice stands for the whole class; see
-//! [`surface_of`] and the README for the table. A street joined to a way of the OSM index
-//! (`StreetAttrs::osm_id`) has its exact tags back, and Valhalla's rules apply as they are
-//! ([`surface_of_osm`]).
+//! [`surface_of`] and the README for the table.
 
 use crate::config::AccessRules;
 use crate::mvt::StreetAttrs;
@@ -304,29 +302,6 @@ fn bicycle_tag(value: Option<&str>) -> Option<bool> {
     }
 }
 
-/// graph.lua's `access` table (also used here for `vehicle` and `foot`).
-fn access_tag(value: Option<&str>) -> Option<bool> {
-    // `any_in`: the first known value of a `;` list.
-    value?.split(';').map(str::trim).find_map(|v| match v {
-        "yes" | "private" | "permissive" | "use_sidepath" | "delivery" | "designated"
-        | "dismount" | "destination" | "customers" | "official" | "public" | "restricted"
-        | "allowed" => Some(true),
-        "no" | "agricultural" | "discouraged" | "forestry" | "emergency" | "psv" => Some(false),
-        _ => None,
-    })
-}
-
-/// `mtb:scale` as Valhalla reads it (`std::from_chars`: the leading integer, "2+" is 2).
-fn mtb_scale(a: &StreetAttrs) -> Option<u32> {
-    let v = a.mtb_scale.as_deref()?.trim();
-    let v = v.strip_prefix('+').unwrap_or(v);
-    let digits: String = v.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
-}
-
-/// Valhalla's `kMaxMtbScale`: below it, `mtb:scale` opens the way to bicycles.
-const MAX_MTB_SCALE: u32 = 6;
-
 /// The edge attributes of a street, Valhalla style.
 pub fn derive(a: &StreetAttrs, rules: AccessRules) -> EdgeInfo {
     let kind = a.kind.as_str();
@@ -350,29 +325,7 @@ pub fn derive(a: &StreetAttrs, rules: AccessRules) -> EdgeInfo {
         "busway" => (false, false, false),
         _ => (false, false, false),
     };
-    if a.osm_id.is_some() {
-        // graph.lua on the exact tags: `access=no` closes the way to all (the mode tags may
-        // open it again), `smoothness=impassable` to vehicles; then `vehicle` and the mode
-        // tags; pbfgraphparser.cc: an `mtb:scale` below 6 opens it to bicycles.
-        if access_tag(a.access.as_deref()) == Some(false) {
-            (auto, foot, bike) = (false, false, false);
-        } else if a.smoothness.as_deref() == Some("impassable") {
-            (auto, bike) = (false, false);
-        }
-        let vehicle = access_tag(a.vehicle.as_deref());
-        if let Some(v) = vehicle {
-            auto = v;
-        }
-        if let Some(f) = access_tag(a.foot.as_deref()) {
-            foot = f;
-        }
-        if let Some(b) = bicycle_tag(a.bicycle.as_deref()).or(vehicle) {
-            bike = b;
-        }
-        if mtb_scale(a).is_some_and(|s| s < MAX_MTB_SCALE) {
-            bike = true;
-        }
-    } else if let Some(b) = bicycle_tag(a.bicycle.as_deref()) {
+    if let Some(b) = bicycle_tag(a.bicycle.as_deref()) {
         bike = b;
     }
     if kind == "busway" {
@@ -441,9 +394,6 @@ pub fn derive(a: &StreetAttrs, rules: AccessRules) -> EdgeInfo {
 ///   (which Valhalla ignores when there is a surface tag) is the best hint left of what it
 ///   is; without it, the kind decides (see [`unpaved_guess`]).
 pub fn surface_of(a: &StreetAttrs, road_class: RoadClass, use_: Use) -> Surface {
-    if a.osm_id.is_some() {
-        return surface_of_osm(a, road_class, use_);
-    }
     match a.surface.as_deref() {
         Some("paved") => return Surface::PavedSmooth,
         Some("unpaved") => return unpaved_guess(a),
@@ -460,48 +410,6 @@ pub fn surface_of(a: &StreetAttrs, road_class: RoadClass, use_: Use) -> Surface 
         return s;
     }
     default_surface(road_class, use_)
-}
-
-/// pbfgraphparser.cc on the exact OSM tags: `surface`, else `tracktype` (only without a
-/// surface tag), else `smoothness` (only without both); then `mtb:scale` overrides whatever
-/// was found (0 dirt, 1 gravel, more path), `mtb:scale:uphill` is not kept; still nothing:
-/// `sac_scale` makes it a path, else the default by road class and use.
-pub fn surface_of_osm(a: &StreetAttrs, road_class: RoadClass, use_: Use) -> Surface {
-    let mut s = if let Some(v) = a.surface.as_deref() {
-        surface_from_osm(v)
-    } else if let Some(t) = a.tracktype.as_deref() {
-        surface_from_tracktype(t)
-    } else {
-        a.smoothness.as_deref().and_then(surface_from_smoothness)
-    };
-    if let Some(scale) = mtb_scale(a) {
-        s = Some(match scale {
-            0 => Surface::Dirt,
-            1 => Surface::Gravel,
-            _ => Surface::Path,
-        });
-    }
-    s.unwrap_or_else(|| {
-        if a.sac_scale.is_some() {
-            Surface::Path
-        } else {
-            default_surface(road_class, use_)
-        }
-    })
-}
-
-/// Valhalla's mapping of `smoothness` (used only without `surface` and `tracktype`).
-pub fn surface_from_smoothness(v: &str) -> Option<Surface> {
-    match v {
-        "excellent" | "good" => Some(Surface::PavedSmooth),
-        "intermediate" => Some(Surface::PavedRough),
-        "bad" => Some(Surface::Compacted),
-        "very_bad" => Some(Surface::Dirt),
-        "horrible" => Some(Surface::Gravel),
-        "very_horrible" => Some(Surface::Path),
-        "impassable" => Some(Surface::Impassable),
-        _ => None,
-    }
 }
 
 /// What an `unpaved` street most likely is in Valhalla's terms, the exact OSM value being
@@ -640,72 +548,6 @@ mod tests {
             derive(&street("track", Some("paved"), Some("grade3")), r).surface,
             Surface::PavedSmooth
         );
-    }
-
-    #[test]
-    fn exact_osm_tags_follow_pbfgraphparser() {
-        let r = AccessRules::France;
-        let osm = |kind: &str, kv: &[(&str, &str)]| {
-            let mut a = street(kind, None, None);
-            a.osm_id = Some(1);
-            for &(k, v) in kv {
-                let v = Some(v.to_string());
-                match k {
-                    "surface" => a.surface = v,
-                    "tracktype" => a.tracktype = v,
-                    "smoothness" => a.smoothness = v,
-                    "mtb:scale" => a.mtb_scale = v,
-                    "sac_scale" => a.sac_scale = v,
-                    "bicycle" => a.bicycle = v,
-                    "access" => a.access = v,
-                    "vehicle" => a.vehicle = v,
-                    _ => unreachable!(),
-                }
-            }
-            derive(&a, r)
-        };
-        let s = |kind: &str, kv: &[(&str, &str)]| osm(kind, kv).surface;
-        // the literal value: unpaved is gravel (no guess), ground dirt, wood compacted
-        assert_eq!(s("path", &[("surface", "unpaved")]), Surface::Gravel);
-        assert_eq!(
-            s("track", &[("surface", "ground"), ("tracktype", "grade2")]),
-            Surface::Dirt
-        );
-        assert_eq!(s("cycleway", &[("surface", "wood")]), Surface::Compacted);
-        assert_eq!(
-            s("footway", &[("surface", "unhewn_cobblestone")]),
-            Surface::PavedRough
-        );
-        // an unknown surface skips tracktype and smoothness
-        assert_eq!(
-            s("track", &[("surface", "xyz"), ("tracktype", "grade1")]),
-            Surface::Dirt
-        );
-        // smoothness only without surface and tracktype
-        assert_eq!(s("track", &[("smoothness", "bad")]), Surface::Compacted);
-        assert_eq!(
-            s("track", &[("smoothness", "bad"), ("tracktype", "grade3")]),
-            Surface::Dirt
-        );
-        // mtb:scale overrides even asphalt
-        assert_eq!(
-            s(
-                "unclassified",
-                &[("surface", "asphalt"), ("mtb:scale", "0")]
-            ),
-            Surface::Dirt
-        );
-        assert_eq!(s("path", &[("mtb:scale", "1+")]), Surface::Gravel);
-        assert_eq!(s("path", &[("mtb:scale", "3")]), Surface::Path);
-        // sac_scale without anything else: path
-        assert_eq!(s("path", &[("sac_scale", "hiking")]), Surface::Path);
-        assert_eq!(s("path", &[]), Surface::Compacted);
-        // access
-        assert!(!osm("track", &[("access", "no")]).bike);
-        assert!(osm("track", &[("access", "no"), ("bicycle", "yes")]).bike);
-        assert!(!osm("track", &[("vehicle", "no")]).bike);
-        assert!(osm("bridleway", &[("bicycle", "yes")]).bike);
-        assert!(osm("pedestrian", &[("mtb:scale", "1")]).bike);
     }
 
     #[test]

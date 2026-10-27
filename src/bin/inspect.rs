@@ -5,7 +5,6 @@
 //! inspect prefetch testdata/*.route.json
 //! inspect stats testdata/*.route.json
 //! inspect near <lat> <lon> [radius_m]
-//! OSM_INDEX=data/osm-index.bin inspect osm-near <lat> <lon> [radius_m]
 //! ```
 
 use osm_surface::config::Config;
@@ -34,29 +33,6 @@ async fn main() -> anyhow::Result<()> {
     let store = TileStore::new(&config)?;
     let grid = store.grid();
     match args.first().map(String::as_str) {
-        Some("osm-near") => {
-            let lat: f64 = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(0.0);
-            let lon: f64 = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
-            let r: f64 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(25.0);
-            let osm = osm_surface::osm::OsmHandle::new(config.osm_index.clone(), grid)?;
-            let index = osm
-                .current()
-                .ok_or_else(|| anyhow::anyhow!("set OSM_INDEX"))?;
-            let mpu = grid.metres_per_unit(lat);
-            for (way, d) in index.ways_near(grid.to_units(lon, lat), r / mpu) {
-                let a = index.attrs(way);
-                let info = osm_surface::valhalla::derive(&a, config.access_rules);
-                println!(
-                    "{:6.1} m  way {}  {} → {} bike={}  {}",
-                    d * mpu,
-                    a.osm_id.unwrap_or(0),
-                    a.kind,
-                    info.surface.as_str(),
-                    info.bike,
-                    serde_json::to_string(&a).unwrap_or_default()
-                );
-            }
-        }
         Some("prefetch") | Some("stats") => {
             let mut all = std::collections::BTreeSet::new();
             for f in &args[1..] {
@@ -159,15 +135,7 @@ async fn main() -> anyhow::Result<()> {
                 .map(|&(la, lo)| (grid.to_units(lo, la), la))
                 .collect();
             let corridor = Corridor::new(grid, &with_lat, params.search_radius_m + 60.0);
-            let osm = osm_surface::osm::OsmHandle::new(config.osm_index.clone(), grid)?;
-            let net = Network::build(
-                grid,
-                &tiles,
-                &corridor,
-                Mode::Bicycle,
-                config.access_rules,
-                osm.current().as_deref(),
-            );
+            let net = Network::build(grid, &tiles, &corridor, Mode::Bicycle, config.access_rules);
             let m = matcher::match_trace(&net, &pts, &params);
             let mut input = 0usize;
             for t in 0..m.obs.len() {

@@ -47,8 +47,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Background chores: the disk cache sweep (at startup, then every 6 hours) and the reload
-/// of the OSM index when its file changes (checked every 5 minutes).
+/// Background chore: the disk cache sweep (at startup, then every 6 hours).
 fn spawn_maintenance(service: Arc<Service>) {
     if let Some(root) = service.config.cache_dir.clone() {
         let max_age = service.config.cache_ttl * 2;
@@ -64,15 +63,6 @@ fn spawn_maintenance(service: Arc<Service>) {
                     tracing::info!(removed, mb = bytes / 1_000_000, "tile cache swept");
                 }
                 tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
-            }
-        });
-    }
-    if service.config.osm_index.is_some() {
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(300)).await;
-                let s = service.clone();
-                let _ = tokio::task::spawn_blocking(move || s.osm.reload_if_changed()).await;
             }
         });
     }

@@ -35,11 +35,6 @@ pub struct Config {
     pub access_rules: AccessRules,
     /// `MAX_CONCURRENT_MATCHES`, default: the number of CPUs.
     pub max_concurrent_matches: usize,
-    /// `OSM_INDEX`: the file written by the `osm-index` tool from an OSM extract. When set,
-    /// each street of the tiles takes the exact OSM tags of the way it lies on (surface,
-    /// smoothness, mtb:scale, sac_scale, access...) and the ways the tiles lack (bridleways)
-    /// are added. Reloaded when the file changes.
-    pub osm_index: Option<PathBuf>,
     /// `TILES_DEADLINE_SECS`, default 11: loading the tiles of one request takes no longer,
     /// or the request fails with a 503 (tribly's read timeout is 15 s; it retries a 503).
     pub tiles_deadline: Duration,
@@ -62,7 +57,6 @@ impl Default for Config {
             cache_dir: Some(PathBuf::from("./.cache/tiles")),
             cache_ttl: Duration::from_secs(7 * 24 * 3600),
             cache_max_bytes: None,
-            osm_index: None,
             memory_cache_mb: 256,
             fetch_concurrency: 8,
             fetch_timeout: Duration::from_secs(8),
@@ -112,9 +106,6 @@ impl Config {
         }
         if let Some(v) = var("CACHE_MAX_GB").and_then(|v| v.parse::<f64>().ok()) {
             c.cache_max_bytes = Some((v.max(0.0) * 1e9) as u64);
-        }
-        if let Some(v) = var("OSM_INDEX") {
-            c.osm_index = Some(PathBuf::from(v));
         }
         if let Some(v) = var("MEMORY_CACHE_MB").and_then(|v| v.parse().ok()) {
             c.memory_cache_mb = v;

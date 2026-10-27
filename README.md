@@ -7,14 +7,12 @@ de Pédalons (backend `tribly`, `StadiaTraceAttributesClient` / `TraceSurfaceCom
 
 Les données viennent des tuiles vectorielles **VersaTiles Shortbread 1.0** (OpenStreetMap,
 `https://tiles.versatiles.org/tiles/osm/{z}/{x}/{y}`, zoom 14), téléchargées à la demande et mises
-en cache. Aucun graphe Valhalla à construire.
+en cache. Aucun graphe Valhalla à construire, aucun extrait OSM à télécharger ni à tenir à jour.
 
-**Recommandé : un index OSM en complément** (`OSM_INDEX`, voir *Index OSM*). Shortbread réduit
-`surface` à `paved` / `unpaved`, n'a ni `smoothness`, ni `mtb:scale`, ni `sac_scale`, ni
-`access`, ni les `bridleway`, et ses données ont quelques mois. L'outil `osm-index` extrait d'un
-fichier Geofabrik les voies et les tags que lit Valhalla. Avec cet index, l'accord avec Stadia sur
-les parcours d'évaluation passe de 86-94 % à **98-99 %**. Sans index, le service marche avec les
-tuiles seules.
+Les tuiles sont la seule source. Shortbread réduit `surface` à `paved` / `unpaved`, n'a ni
+`smoothness`, ni `mtb:scale`, ni `sac_scale`, ni `access`, ni les `bridleway`, et ses données ont
+quelques mois. Sur les parcours d'évaluation, l'accord avec Stadia est de **86 à 94 %** par
+classe de surface et de **98 à 99 %** sur revêtu / non revêtu (voir *Évaluation*).
 
 ## Ce que fait le service
 
@@ -36,8 +34,6 @@ GET  /health
    illisible est supprimé et retéléchargé. Un 404 ou une page d'erreur du serveur donnent un 503,
    jamais une tuile vide.
 3. **Graphe** : les lignes `streets` utilisables par le mode (voir *Accès*), découpées en segments
-   (avec l'index OSM, chaque segment prend les tags de la voie OSM sur laquelle il est posé, et les
-   `bridleway` absentes des tuiles sont ajoutées),
    coupées au carré exact de leur tuile ; nœuds retrouvés par les coordonnées (pas d'identifiant OSM
    dans les tuiles) ; bouts coupés aux bords de tuile recollés ; sommets posés sur une autre ligne du
    même niveau (sol / pont / tunnel) raccordés à elle (jonction dont le sommet partagé a disparu à la
@@ -94,10 +90,9 @@ Valhalla (`src/mjolnir/pbfgraphparser.cc`) prend la valeur du tag `surface` ; sa
 le `tracktype` ; sans l'un ni l'autre, `smoothness`. Ensuite `mtb:scale` remplace ce qui a été
 trouvé, même une surface asphaltée : 0 → `dirt`, 1 → `gravel`, 2 et plus → `path`. Si rien n'a été
 trouvé, `sac_scale` donne `path`, sinon une valeur par défaut selon la classe de route et l'usage
-(tableau ci-dessous). Avec l'index OSM, ces règles s'appliquent telles quelles aux tags exacts de
-la voie (`valhalla::surface_of_osm`).
+(tableau ci-dessous).
 
-### Sans index : de Shortbread à Valhalla
+### De Shortbread à Valhalla
 
 Shortbread ne garde du tag `surface` que `paved` / `unpaved` et ne garde ni `smoothness`, ni
 `mtb:scale`, ni `sac_scale`. D'où :
@@ -134,45 +129,9 @@ cyclable, `shared` sur un path ou un footway ouvert aux vélos, `none` ailleurs.
 Valeurs par défaut de Valhalla (`lua/graph.lua`), avec par défaut les règles françaises de
 `adminconstants.h` (`ACCESS_RULES=fr`) : vélos admis sur les footways, piétons sur les pistes
 cyclables, ni l'un ni l'autre sur les trunks ; le tag `bicycle` l'emporte (`no`, `designated`…).
-Avec l'index OSM s'y ajoutent `access=no` (fermé à tous sauf tag de mode contraire),
-`smoothness=impassable` (fermé aux véhicules), `vehicle`, `foot` et `mtb:scale` < 6 (ouvert aux
-vélos). `ACCESS_RULES=default` donne les règles mondiales. Rails, trams, pistes d'aéroport ne font
+`access`, `vehicle`, `foot`, `smoothness` et `mtb:scale` ne sont pas dans les tuiles et ne
+comptent donc pas. `ACCESS_RULES=default` donne les règles mondiales. Rails, trams, pistes d'aéroport ne font
 jamais partie du réseau.
-
-## Index OSM
-
-```bash
-curl -LO https://download.geofabrik.de/europe/france/pays-de-la-loire-latest.osm.pbf
-cargo run --release --bin osm-index -- pays-de-la-loire-latest.osm.pbf data/osm-index.bin
-OSM_INDEX=data/osm-index.bin cargo run --release
-```
-
-`osm-index` garde les voies `highway` du réseau (hors `area=yes`), leur géométrie et les tags
-`highway`, `footway`, `surface`, `tracktype`, `smoothness`, `mtb:scale`, `sac_scale`, `service`,
-`bicycle`, `foot`, `access`, `vehicle`, `horse`, `bridge`, `tunnel`, `oneway`. Il écrit un fichier
-compact, puis le renomme sur l'ancien. `--bbox min_lon,min_lat,max_lon,max_lat` limite l'index à
-une zone (fixture de test). Pour les Pays de la Loire : 370 Mo de PBF, 11 s, un index de 70 Mo
-(847 000 voies). Le service le charge en 0,8 s et occupe alors ≈ 270 Mo de RAM. Pour la France
-entière, compter environ dix fois plus (≈ 3 Go de RAM) ; on peut aussi n'indexer que les régions
-utiles.
-
-À chaque requête, chaque segment des tuiles est rattaché à la voie OSM sur laquelle il est posé :
-
-- la voie la plus proche à moins de 8 m, à 40° près de la même direction ;
-- un autre type de voie coûte 2 m s'il est voisin (`path` ↔ `track`…) et 6 m sinon. Ce sont les
-  changements d'OSM depuis la construction des tuiles ;
-- une voie que le mode ne peut pas emprunter coûte 3 m quand la rue des tuiles le pouvait. Exemple :
-  un chemin scindé depuis en piste cyclable et en trottoir `bicycle=no` est la piste pour un vélo ;
-- il faut l'accord de la moitié au moins des points pris le long du segment.
-
-Sans voie trouvée, le segment garde les attributs des tuiles. Les `bridleway`, absentes des tuiles,
-sont ajoutées au réseau depuis l'index. Leurs sommets sont arrondis à la grille des tuiles pour
-retomber sur les jonctions.
-
-**Fraîcheur** : régénérer l'index chaque semaine, par un cron qui télécharge le fichier Geofabrik
-du jour et relance `osm-index`. Le service vérifie toutes les 5 minutes si le fichier a changé et
-le recharge sans redémarrer. `/health` donne la date OSM de l'index (`osm_index.replication_time`)
-et celle des tuiles (`tiles.osm_replication_time`, lue dans leur `tiles.json` au démarrage).
 
 ## Lancer
 
@@ -189,7 +148,6 @@ curl -s localhost:8002/health
 | `CACHE_DIR` | `./.cache/tiles` | cache disque des tuiles brutes (vide : pas de cache disque) |
 | `CACHE_TTL_DAYS` | `7` | âge au-delà duquel une tuile est retéléchargée ; à 2 × TTL elle est supprimée |
 | `CACHE_MAX_GB` | (aucune) | taille maximale du cache disque : les plus anciennes tuiles au-delà sont supprimées |
-| `OSM_INDEX` | (aucun) | index OSM écrit par `osm-index` (recommandé) |
 | `MEMORY_CACHE_MB` | `256` | LRU mémoire des tuiles décodées |
 | `FETCH_CONCURRENCY` | `8` | téléchargements simultanés, tout le processus |
 | `FETCH_TIMEOUT_SECS` | `8` | délai d'un téléchargement |
@@ -210,19 +168,12 @@ traversées : une tuile z14 fait en moyenne 100 à 300 ko en ville, quelques diz
 
 ```bash
 docker build -t osm-surface .
-# l'index OSM, dans le volume (à refaire chaque semaine)
-docker run --rm -v osm-surface-data:/data alpine sh -c \
-  'wget -qO /data/region.osm.pbf https://download.geofabrik.de/europe/france/pays-de-la-loire-latest.osm.pbf'
-docker run --rm -v osm-surface-data:/data --entrypoint osm-index osm-surface \
-  /data/region.osm.pbf /data/osm-index.bin
-# le service
-docker run -d --name osm-surface -p 8002:8002 -v osm-surface-data:/data \
-  -e OSM_INDEX=/data/osm-index.bin osm-surface
+docker run -d --name osm-surface -p 8002:8002 -v osm-surface-data:/data osm-surface
 curl -s localhost:8002/health
 ```
 
-Image d'exécution distroless (`cc-debian12`, utilisateur non root, ≈ 67 Mo) avec `osm-surface` et
-`osm-index`. Le cache des tuiles et l'index vont dans le volume `/data`. Compter quelques Mo de
+Image d'exécution distroless (`cc-debian12`, utilisateur non root) avec `osm-surface`. Le cache
+des tuiles va dans le volume `/data`. Compter quelques Mo de
 cache par centaine de km de parcours (≈ 11 Mo pour les trois parcours d'évaluation autour de
 Nantes). L'image de build est épinglée (`rust:1.99.1-slim-bookworm`).
 
@@ -241,17 +192,14 @@ QUARKUS_REST_CLIENT_STADIAMAPS_TRACE_URL=http://<hôte>:8002
 - Le délai de lecture du client (15 s) est large : 50 à 100 ms par requête quand les tuiles sont en
   cache, ≈ 0,9 s pour les 40 tuiles du parcours de 90 km téléchargées à froid (quelques secondes
   pour une tranche de 190 km dans une région jamais vue).
-- Monter l'index OSM de la zone où roulent les utilisateurs (`OSM_INDEX`) : sans lui, la répartition
-  GRAVEL / DIRT est devinée. Hors de la zone indexée, le service retombe sur les tuiles seules.
 - Les surfaces déjà stockées (calculées par Stadia) restent valables ; un recalcul complet n'est pas
   nécessaire, mais les nouvelles traces auront des plages légèrement différentes (voir *Évaluation*).
 - Coût : plus aucun crédit Stadia pour la surface (20 crédits par tranche de 190 km jusque-là).
 
 ### Attribution (ODbL)
 
-Les données sont celles d'OpenStreetMap (licence ODbL), via les tuiles VersaTiles et l'extrait
-Geofabrik de l'index. L'interface doit
-afficher « © contributeurs OpenStreetMap » avec un lien vers
+Les données sont celles d'OpenStreetMap (licence ODbL), via les tuiles VersaTiles. L'interface
+doit afficher « © contributeurs OpenStreetMap » avec un lien vers
 <https://www.openstreetmap.org/copyright> partout où la surface est montrée. C'est déjà le cas
 (`routes.surface.attribution` sur le web, `routes.surfaceDetail.attribution` sur mobile, lien vers
 la page copyright) ; à faire au moment de la bascule :
@@ -278,26 +226,28 @@ tribly (`TraceSurfaceComputer` → `TraceSurfaceProjection` → `SurfaceRanges`,
 réponses Stadia. Rapport complet : [`eval/report.md`](eval/report.md) (répartition, matrice de
 confusion, 10 plus grands écarts avec la rue appariée, nos plages inconnues, table de calibration).
 
-L'outil évalue l'index OSM (`OSM_INDEX`, sinon `data/osm-index.bin` s'il existe ;
-`--no-osm-index` pour s'en passer), puis les tuiles seules pour comparaison.
-
-| Parcours | Longueur | Tuiles + index OSM | Tuiles seules | Revêtu / non revêtu (index) | Latence (index) |
+| Parcours | Longueur | Accord (classe) | Hors inconnu Stadia | Revêtu / non revêtu | Latence |
 |---|---:|---:|---:|---:|---:|
-| graymond-ride-138 | 90,2 km | **98,0 %** | 86,0 % | 99,5 % | ≈ 90 ms |
-| np-655-gravel | 52,2 km | **98,9 %** | 91,6 % | 99,3 % | ≈ 90 ms |
-| np677-chill-gravel | 42,8 km | **98,5 %** | 93,5 % | 99,4 % | ≈ 65 ms |
+| graymond-ride-138 | 90,2 km | **86,0 %** | 86,5 % | 98,1 % | ≈ 100 ms |
+| np-655-gravel | 52,2 km | **91,6 %** | 91,5 % | 99,0 % | ≈ 75 ms |
+| np677-chill-gravel | 42,8 km | **93,5 %** | 93,9 % | 99,3 % | ≈ 60 ms |
 
-Index du 2026-10-25 (Geofabrik), tuiles OSM du 2026-06-07. Sans compter les mètres où Stadia
-lui-même ne donne pas de surface : 98,6 / 98,9 / 98,9 %. Avant la revue : 85,6 / 91,6 / 93,4 %
-(tuiles seules).
+Tuiles OSM du 2026-06-07. Avant la revue : 85,6 / 91,6 / 93,4 %.
 
 La référence est Stadia (Valhalla sur un OSM de fin septembre 2026 environ), pas la vérité
-terrain. Avec l'index, les écarts restants tiennent à la référence (Stadia sans surface, ou passé
-ailleurs depuis un changement d'OSM), à des voies parallèles (trottoir ou chaussée) et à quelques
-modifications d'OSM entre les deux dates. Sans l'index, ils viennent surtout de ce que les tuiles ne
-disent pas (voir *Limites*). Le détail est dans le rapport.
+terrain. Revêtu contre non revêtu, les tuiles suffisent. Les écarts restants portent surtout sur
+la classe d'un chemin non revêtu (GRAVEL, DIRT ou PATH), et viennent de ce que les tuiles ne disent
+pas :
 
-Charge : 15 000 points bruités sur 180 km → 160 ms avec l'index, tuiles en cache. La réponse fait
+- la surface réduite à `paved` / `unpaved` par Shortbread (≈ 60 % des écarts) ;
+- l'âge des tuiles (≈ 14 %) ;
+- `mtb:scale`, `smoothness`, `sac_scale` et les `bridleway`, absents des tuiles (≈ 10 %) ;
+- le reste : la référence elle-même (Stadia sans surface, ou passé ailleurs depuis un changement
+  d'OSM) et l'appariement (voies parallèles).
+
+Le détail est dans le rapport et dans *Limites*.
+
+Charge : 15 000 points bruités sur 180 km → moins de 160 ms, tuiles en cache. La réponse fait
 1,4 Mo, 250 ko en gzip.
 
 ## Tests
@@ -312,20 +262,16 @@ Tout tourne hors ligne. Les tests unitaires couvrent :
 - polyline6, dont le rejet des deltas forgés ;
 - la géodésie et le décodage MVT sur une vraie tuile ;
 - le graphe : découpage aux bords de tuile et recollage ;
-- la dérivation Valhalla, sur les tuiles et sur les tags OSM exacts (`mtb:scale`, `smoothness`,
-  `sac_scale`, accès) ;
-- le format, la lecture et le rattachement de l'index OSM ;
+- la dérivation Valhalla depuis les attributs Shortbread (surface, `use`, `cycle_lane`, accès) ;
 - l'appariement sur un réseau synthétique, la couverture des sauts par les arêtes et le 444
   quand seuls des points densifiés sont appariés ;
 - le nettoyage du cache et le portage de la projection tribly.
 
 Les tests d'intégration passent par le routeur axum (`tests/api.rs`). Ils utilisent 6 km du
-parcours np-655, avec ses 3 tuiles réelles et un index OSM de la même zone
-(`tests/fixtures/osm-index-np655.bin`, 50 ko) :
+parcours np-655, avec ses 3 tuiles réelles :
 
 - le contrat de la réponse ;
-- l'accord avec les plages Stadia : plus de 80 % avec les tuiles seules, plus de 95 % avec
-  l'index ;
+- l'accord avec les plages Stadia (plus de 80 %) ;
 - la forme `shape`, les codes d'erreur Valhalla, dont le 171 sur deux vraies tuiles de mer ;
 - le 503 quand le serveur de tuiles est injoignable, ou hors ligne quand la tuile manque ;
 - le gzip.
@@ -335,14 +281,11 @@ parcours np-655, avec ses 3 tuiles réelles et un index OSM de la même zone
 qu'un 404 donne une erreur « indisponible » sans rien écrire.
 
 Outil de développement : `cargo run --release --bin inspect -- near <lat> <lon> [rayon]` (les rues
-autour d'un point et leurs attributs), `… osm-near <lat> <lon> [rayon]` (les voies de l'index
-OSM, avec `OSM_INDEX`), `… trace <route.json> <de_m> <à_m>` (l'appariement d'un
+autour d'un point et leurs attributs), `… trace <route.json> <de_m> <à_m>` (l'appariement d'un
 tronçon, `CANDS=1` pour les candidats), `… prefetch|stats <route.json>…`,
 `… fixture <route.json> <de_m> <à_m> <sortie.json> <dossier_tuiles>`.
 
 ## Limites connues
-
-Sans index OSM :
 
 - **Surface non revêtue approximative** : `unpaved` ne dit pas si c'est du gravier, du compacté,
   de la terre ou de l'herbe. La classe GRAVEL / DIRT est devinée (règles ci-dessus) : c'est la
@@ -358,16 +301,10 @@ Sans index OSM :
 - **Fraîcheur** : les tuiles VersaTiles sont reconstruites de temps en temps (OSM du 2026-06-07
   pour celles utilisées ici, date donnée par `/health`). Les modifications OSM plus récentes n'y
   sont pas.
-
-Dans tous les cas :
-
 - **Topologie reconstruite** : pas d'identifiant de nœud ; les jonctions sont retrouvées par la
   géométrie (tolérance < 1 m). Deux voies qui se croisent sans sommet commun dans la tuile ne sont
   pas reliées (un saut à coût fixe compense dans l'appariement). Les sens uniques et les
   restrictions de tourner sont ignorés (une trace planifiée est déjà légale).
-- **Index OSM** : en mémoire (≈ 270 Mo par région de la taille des Pays de la Loire). Le
-  rattachement d'un segment se fait à la majorité ; un segment de tuile à cheval sur deux voies
-  OSM prend les tags d'une seule. `mtb:scale:uphill` n'est pas lu.
 - **Pas d'`osm_changeset`**, ni `admins`, `confidence_score`, `names`, `way_id`, `speed`…
 - **Antiméridien** : une trace qui le traverse est refusée (444).
 - **Un seul fournisseur de tuiles** : si `tiles.versatiles.org` est injoignable et que les tuiles ne

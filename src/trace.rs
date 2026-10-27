@@ -6,7 +6,6 @@ use crate::geo::{self, corridor_tiles};
 use crate::matcher::{self, Matched, Params, Step};
 use crate::mvt::StreetAttrs;
 use crate::network::{Corridor, Network};
-use crate::osm::OsmHandle;
 use crate::polyline;
 use crate::tiles::{TileError, TileStore};
 use crate::valhalla::Mode;
@@ -314,8 +313,6 @@ pub struct Service {
     pub config: Config,
     pub store: TileStore,
     pub params: Params,
-    /// The OSM index, if configured.
-    pub osm: OsmHandle,
     /// The build and OSM dates of the tiles (their TileJSON), once fetched.
     pub tiles_info: std::sync::RwLock<Option<serde_json::Value>>,
     matches: Arc<tokio::sync::Semaphore>,
@@ -324,13 +321,11 @@ pub struct Service {
 impl Service {
     pub fn new(config: Config) -> anyhow::Result<Self> {
         let store = TileStore::new(&config)?;
-        let osm = OsmHandle::new(config.osm_index.clone(), store.grid())?;
         Ok(Self {
             matches: Arc::new(tokio::sync::Semaphore::new(config.max_concurrent_matches)),
             config,
             store,
             params: Params::from_env(),
-            osm,
             tiles_info: std::sync::RwLock::new(None),
         })
     }
@@ -379,7 +374,6 @@ impl Service {
         serde_json::json!({
             "tiles_url": self.config.tiles_url,
             "tiles": self.tiles_info.read().ok().and_then(|t| t.clone()),
-            "osm_index": self.osm.info(),
         })
     }
 
@@ -414,7 +408,6 @@ impl Service {
             })?
             .map_err(|_| ApiError::unavailable("shutting down"))?;
         let rules = self.config.access_rules;
-        let osm = self.osm.current();
         let match_started = Instant::now();
         let mut out = tokio::task::spawn_blocking(move || -> Result<TraceOutput, ApiError> {
             let _permit = permit;
@@ -424,7 +417,7 @@ impl Service {
                 .map(|&(lat, lon)| (grid.to_units(lon, lat), lat))
                 .collect();
             let corridor = Corridor::new(grid, &with_lat, margin);
-            let net = Network::build(grid, &tiles, &corridor, trace.mode, rules, osm.as_deref());
+            let net = Network::build(grid, &tiles, &corridor, trace.mode, rules);
             let matched = matcher::match_trace(&net, &trace.points, &trace.params);
             let mut out = describe(&net, &matched, &trace)?;
             out.stats.tiles = tiles.len();
@@ -751,7 +744,6 @@ mod tests {
             &Corridor::new(grid, &line, 200.0),
             Mode::Bicycle,
             AccessRules::France,
-            None,
         )
     }
 

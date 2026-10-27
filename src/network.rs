@@ -9,7 +9,6 @@
 use crate::config::AccessRules;
 use crate::geo::{self, Grid};
 use crate::mvt::{StreetAttrs, StreetTile};
-use crate::osm::OsmIndex;
 use crate::valhalla::{self, EdgeInfo, Mode};
 use rstar::primitives::{GeomWithData, Line};
 use rstar::RTree;
@@ -106,22 +105,16 @@ impl Corridor {
 }
 
 impl Network {
-    /// The graph of the streets of `tiles` that `mode` may use, within the corridor. With an
-    /// OSM index, each segment takes the tags of the OSM way it lies on, and the ways of the
-    /// kinds the tiles lack are added.
+    /// The graph of the streets of `tiles` that `mode` may use, within the corridor.
     pub fn build(
         grid: Grid,
         tiles: &[Arc<StreetTile>],
         corridor: &Corridor,
         mode: Mode,
         rules: AccessRules,
-        osm: Option<&OsmIndex>,
     ) -> Self {
         let mut classes: Vec<EdgeClass> = Vec::new();
         let mut class_ids: HashMap<StreetAttrs, Option<u32>> = HashMap::new();
-        // The class of the ways of the index, by way.
-        let mut way_classes: HashMap<u32, Option<u32>> = HashMap::new();
-        let mut usable_ways: HashMap<u32, bool> = HashMap::new();
         let mut class_of = |attrs: &StreetAttrs, classes: &mut Vec<EdgeClass>| -> Option<u32> {
             *class_ids.entry(attrs.clone()).or_insert_with(|| {
                 if attrs.rail || !valhalla::is_routable_kind(&attrs.kind) {
@@ -149,82 +142,18 @@ impl Network {
             })
         };
         for tile in tiles {
-            let (_, tile_lat) = grid.to_lonlat([
-                (tile.x as f64 + 0.5) * grid.extent as f64,
-                (tile.y as f64 + 0.5) * grid.extent as f64,
-            ]);
-            let mpu = grid.metres_per_unit(tile_lat);
             for line in &tile.lines {
-                let attrs = &tile.attrs[line.attr as usize];
-                let joinable =
-                    osm.is_some() && !attrs.rail && valhalla::is_routable_kind(&attrs.kind);
-                let tile_class = class_of(attrs, &mut classes);
-                if tile_class.is_none() && !joinable {
+                let Some(class) = class_of(&tile.attrs[line.attr as usize], &mut classes) else {
                     continue;
-                }
+                };
                 for w in line.points.windows(2) {
                     if !corridor.touches(w[0], w[1]) {
                         continue;
                     }
-                    let class = match osm.filter(|_| joinable).and_then(|o| {
-                        let mut cost = |way: u32| {
-                            if tile_class.is_none() {
-                                return 0.0;
-                            }
-                            let usable = *usable_ways.entry(way).or_insert_with(|| {
-                                valhalla::derive(&o.attrs(way), rules).allows(mode)
-                            });
-                            if usable {
-                                0.0
-                            } else {
-                                crate::osm::UNUSABLE_JOIN_COST
-                            }
-                        };
-                        o.join(w[0], w[1], attrs, mpu, &mut cost)
-                            .map(|way| (o, way))
-                    }) {
-                        Some((o, way)) => *way_classes
-                            .entry(way)
-                            .or_insert_with(|| class_of(&o.attrs(way), &mut classes)),
-                        None => tile_class,
-                    };
-                    let Some(class) = class else { continue };
                     let a = node_of(w[0], &mut nodes);
                     let b = node_of(w[1], &mut nodes);
                     if a != b {
                         raw.push((a, b, class));
-                    }
-                }
-            }
-        }
-        if let Some(o) = osm {
-            // The ways the tiles do not have at all (bridleways), within the tiles' area.
-            let e = grid.extent as f64;
-            let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
-            for t in tiles {
-                lo = [lo[0].min(t.x as f64 * e), lo[1].min(t.y as f64 * e)];
-                hi = [
-                    hi[0].max((t.x + 1) as f64 * e),
-                    hi[1].max((t.y + 1) as f64 * e),
-                ];
-            }
-            if !tiles.is_empty() {
-                for way in o.extra_ways(lo, hi) {
-                    let Some(class) = *way_classes
-                        .entry(way)
-                        .or_insert_with(|| class_of(&o.attrs(way), &mut classes))
-                    else {
-                        continue;
-                    };
-                    for w in o.way_points(way).windows(2) {
-                        if !corridor.touches(w[0], w[1]) {
-                            continue;
-                        }
-                        let a = node_of(w[0], &mut nodes);
-                        let b = node_of(w[1], &mut nodes);
-                        if a != b {
-                            raw.push((a, b, class));
-                        }
                     }
                 }
             }
@@ -505,14 +434,7 @@ mod tests {
         let points: Vec<([f64; 2], f64)> =
             (0..=20).map(|k| (at(k as f64 * 10.0, 0.0), 47.2)).collect();
         let corridor = Corridor::new(grid, &points, 200.0);
-        let net = Network::build(
-            grid,
-            &tiles,
-            &corridor,
-            Mode::Bicycle,
-            AccessRules::France,
-            None,
-        );
+        let net = Network::build(grid, &tiles, &corridor, Mode::Bicycle, AccessRules::France);
         // 0-50, 50-100, 100-200, and the side street
         assert_eq!(net.segs.len(), 4, "{:?}", net.segs);
         assert_eq!(net.classes.len(), 1);

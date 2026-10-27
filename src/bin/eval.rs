@@ -4,11 +4,8 @@
 //!
 //! ```text
 //! eval [--data testdata] [--url http://localhost:8002] [--out eval/report.md] [--costing bicycle]
-//!      [--osm-index data/osm-index.bin | --no-osm-index]
 //! ```
-//! Without `--url` the service runs in-process (same configuration from the environment);
-//! it then uses the OSM index of `OSM_INDEX`, else `data/osm-index.bin` if there is one, and
-//! also evaluates the tiles alone for comparison.
+//! Without `--url` the service runs in-process (same configuration from the environment).
 
 use osm_surface::config::Config;
 use osm_surface::mvt::StreetAttrs;
@@ -222,18 +219,11 @@ fn describe_street(a: Option<&StreetAttrs>) -> String {
     match a {
         None => "-".into(),
         Some(a) => {
-            let mut s = match a.osm_id {
-                Some(id) => format!("w{id} {}", a.kind),
-                None => format!("(tuile) {}", a.kind),
-            };
+            let mut s = a.kind.clone();
             for (k, v) in [
                 ("surface", &a.surface),
                 ("tracktype", &a.tracktype),
-                ("smoothness", &a.smoothness),
-                ("mtb:scale", &a.mtb_scale),
-                ("sac_scale", &a.sac_scale),
                 ("service", &a.service),
-                ("access", &a.access),
                 ("bicycle", &a.bicycle),
             ] {
                 if let Some(v) = v {
@@ -461,41 +451,30 @@ async fn evaluate(
     Ok(rep)
 }
 
-/// What the disagreements left come from, as found by inspecting them (OSM tags checked in
-/// the OSM index and on openstreetmap.org for most of them; measured on 2026-10-27).
+/// What the disagreements left come from, as found by inspecting them (OSM tags checked on
+/// openstreetmap.org and in a Geofabrik extract; measured on 2026-10-27).
 const RESIDUAL_GAPS: &str = "
 ### D'où viennent les écarts
 
-**Avec l'index OSM** (98 à 99 % d'accord), il reste un peu plus d'un kilomètre par parcours,
-en morceaux de 40 à 300 m :
-
-- **La référence elle-même** : Stadia ne donne pas de surface (UNKNOWN) là où OSM en a une
-  (graymond 58540-59120 : un `footway surface=ground` ; np677 35510-35660), ou passe ailleurs
-  parce qu'OSM a changé depuis (graymond 47775-48035 : une `track` passée depuis en
-  `bicycle=no`, que nous ne prenons plus). Le chiffre « hors inconnu Stadia » retire les premiers.
-- **Voies parallèles** : trottoir ou `footway` contre la chaussée voisine (graymond 4410-4615,
-  np655 41245-41310, np677 33965-34050), allée de service asphaltée contre un chemin parallèle
-  (graymond 2150-2240, np655 44830-44955, np677 10105-10180). Les deux appariements sont
-  plausibles ; un léger surcoût des footways pour le vélo en corrige déjà une partie.
-- **Date des données** : l'index est construit sur l'OSM du jour (Geofabrik), Stadia sur un OSM
-  de fin septembre 2026 environ ; quelques chemins ont changé de `surface` entre les deux.
-
-**Les tuiles seules** (86 à 94 %) perdent ce que l'index rend (mesuré par la revue sur ces
-trois parcours, environ 20 km d'écart en tout) :
+Les tuiles seules donnent 86 à 94 % d'accord par classe, 98 à 99 % sur revêtu / non revêtu.
+L'écart restant (environ 20 km sur les trois parcours) a été inspecté tronçon par tronçon en
+comparant aux tags OSM exacts :
 
 - **59 % : surface réduite** à `paved` / `unpaved` par Shortbread. Valhalla lit la valeur exacte
   (`compacted`, `gravel`, `fine_gravel` → GRAVEL ; `ground`, `dirt`, `earth` → DIRT ; `grass` →
   PATH) ; pour un `unpaved`, la classe est devinée (voir README) et aucune règle sur les seuls
   attributs des tuiles ne dépasse 87,6 / 93,3 / 93,5 %.
-- **14 % : âge des tuiles** (OSM du 2026-06-07) : des `path` devenus `track` (DIRT par défaut chez
-  Valhalla) et l'inverse, des surfaces ajoutées depuis.
+- **14 % : âge des tuiles** (OSM du 2026-06-07, Stadia sur un OSM de fin septembre 2026 environ) :
+  des `path` devenus `track` (DIRT par défaut chez Valhalla) et l'inverse, des surfaces ajoutées
+  depuis.
 - **6 % : `mtb:scale`** (Valhalla : 0 → dirt, 1 → gravel, ≥ 2 → path, même sur de l'asphalte ;
   graymond 18370-19320 : une route `surface=asphalt` + `mtb:scale=0` que Stadia donne DIRT),
   absent des tuiles comme `sac_scale` et `smoothness`.
 - **3 % : `highway=bridleway`**, absent des tuiles (graymond 13850-14540 : 690 m de bridleway
   `surface=compacted` que Stadia voit GRAVEL, inconnus pour nous).
-- **≈ 12 % : la référence** (Stadia UNKNOWN ou en désaccord avec l'OSM actuel), le reste :
-  l'appariement.
+- **≈ 12 % : la référence** (Stadia UNKNOWN là où OSM a une surface, ou passé ailleurs depuis un
+  changement d'OSM ; le chiffre « hors inconnu Stadia » retire les premiers), le reste :
+  l'appariement (voies parallèles : trottoir contre chaussée, allée de service contre chemin).
 ";
 
 fn pct(a: f64, total: f64) -> String {
@@ -526,7 +505,6 @@ fn summary_table(s: &mut String, reports: &[RouteReport]) {
 
 fn report_markdown(
     reports: &[RouteReport],
-    baseline: Option<&[RouteReport]>,
     calibration: &Calibration,
     mode: &str,
     sources: &str,
@@ -543,14 +521,6 @@ fn report_markdown(
     writeln!(s, "Sources : {sources}\n").ok();
     writeln!(s, "## Synthèse\n").ok();
     summary_table(&mut s, reports);
-    if let Some(base) = baseline {
-        writeln!(
-            s,
-            "\nLes tuiles seules (sans index OSM), même appariement :\n"
-        )
-        .ok();
-        summary_table(&mut s, base);
-    }
     writeln!(s, "{}", RESIDUAL_GAPS).ok();
     for r in reports {
         writeln!(s, "\n## {}\n", r.name).ok();
@@ -558,7 +528,10 @@ fn report_markdown(
         let counts = if r.tiles == 0 && r.segments == 0 {
             String::new()
         } else {
-            format!("{} tuiles, {} segments de rue retenus, ", r.tiles, r.segments)
+            format!(
+                "{} tuiles, {} segments de rue retenus, ",
+                r.tiles, r.segments
+            )
         };
         writeln!(
             s,
@@ -707,8 +680,6 @@ async fn main() -> anyhow::Result<()> {
     let mut url: Option<String> = None;
     let mut out = PathBuf::from("eval/report.md");
     let mut costing = "bicycle".to_string();
-    let mut index_arg: Option<PathBuf> = None;
-    let mut no_index = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -716,122 +687,69 @@ async fn main() -> anyhow::Result<()> {
             "--url" => url = args.next(),
             "--out" => out = PathBuf::from(args.next().unwrap_or_default()),
             "--costing" => costing = args.next().unwrap_or_else(|| "bicycle".into()),
-            "--osm-index" => index_arg = args.next().map(PathBuf::from),
-            "--no-osm-index" => no_index = true,
             _ => anyhow::bail!(
-                "usage: eval [--data dir] [--url base] [--out report.md] [--costing bicycle] \
-                 [--osm-index file | --no-osm-index]"
+                "usage: eval [--data dir] [--url base] [--out report.md] [--costing bicycle]"
             ),
         }
     }
-    let mut backends: Vec<(Backend, String, String)> = Vec::new();
-    match &url {
+    let (backend, mode, sources) = match &url {
         Some(u) => {
             let client = reqwest::Client::new();
             let sources = http_sources(&client, u)
                 .await
                 .unwrap_or_else(|| "le service interrogé (`/health` illisible)".to_string());
-            backends.push((Backend::Http(client, u.clone()), format!("HTTP {u}"), sources));
+            (
+                Backend::Http(client, u.clone()),
+                format!("HTTP {u}"),
+                sources,
+            )
         }
         None => {
-            let mut config = Config::from_env();
-            if no_index {
-                config.osm_index = None;
-            } else if let Some(p) = index_arg {
-                config.osm_index = Some(p);
-            } else if config.osm_index.is_none() {
-                let default = PathBuf::from("data/osm-index.bin");
-                config.osm_index = default.exists().then_some(default);
-            }
-            let service = Arc::new(Service::new(config.clone())?);
+            let service = Arc::new(Service::new(Config::from_env())?);
             service.fetch_tiles_info().await;
-            let tiles = service
-                .tiles_info
-                .read()
-                .ok()
-                .and_then(|t| t.clone())
-                .and_then(|t| t["osm_replication_time"].as_str().map(str::to_string))
-                .map(|d| format!("tuiles VersaTiles (OSM du {d})"))
-                .unwrap_or_else(|| "tuiles VersaTiles".to_string());
-            let sources = match service.osm.info() {
-                Some(i) => format!(
-                    "{tiles} + index OSM `{}` ({} voies, OSM du {})",
-                    i.source,
-                    i.ways,
-                    i.replication_time.as_deref().unwrap_or("?")
-                ),
-                None => format!("{tiles} seules"),
-            };
-            let with_index = config.osm_index.is_some();
-            backends.push((
+            let sources = tiles_sources(service.tiles_info.read().ok().and_then(|t| t.clone()));
+            (
                 Backend::InProcess(service),
                 "en processus".to_string(),
                 sources,
-            ));
-            if with_index {
-                let mut tiles_only = config;
-                tiles_only.osm_index = None;
-                backends.push((
-                    Backend::InProcess(Arc::new(Service::new(tiles_only)?)),
-                    "tuiles seules".to_string(),
-                    String::new(),
-                ));
-            }
+            )
         }
-    }
+    };
     let mut files: Vec<PathBuf> = std::fs::read_dir(&data)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.to_string_lossy().ends_with(".route.json"))
         .collect();
     files.sort();
-    let mut runs: Vec<Vec<RouteReport>> = Vec::new();
+    let mut reports = Vec::new();
     let mut calibration = Calibration::new();
-    for (k, (backend, label, _)) in backends.iter().enumerate() {
-        println!("== {label}");
-        let mut reports = Vec::new();
-        let mut scratch = Calibration::new();
-        for f in &files {
-            let route = load_route(f)?;
-            let cal = if k == 0 {
-                &mut calibration
-            } else {
-                &mut scratch
-            };
-            let rep = evaluate(&route, backend, &costing, cal).await?;
-            println!(
-                "{:24} {:6.1} km  agreement {:5.1} % (known {:5.1} %)  paved/unpaved {:5.1} %  unmatched pts {:3}  {:6.0} ms",
-                rep.name,
-                rep.length / 1000.0,
-                rep.agree * 100.0,
-                rep.agree_known * 100.0,
-                rep.paved_agree * 100.0,
-                rep.unmatched_points,
-                rep.latency_ms
-            );
-            let line = |m: &BTreeMap<TrackSurface, f64>| {
-                TrackSurface::ALL
-                    .iter()
-                    .filter_map(|c| m.get(c).map(|v| format!("{} {:.0}", c.name(), v)))
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            };
-            println!(
-                "    ours: {}\n    ref:  {}",
-                line(&rep.ours),
-                line(&rep.reference)
-            );
-            reports.push(rep);
-        }
-        runs.push(reports);
+    for f in &files {
+        let route = load_route(f)?;
+        let rep = evaluate(&route, &backend, &costing, &mut calibration).await?;
+        println!(
+            "{:24} {:6.1} km  agreement {:5.1} % (known {:5.1} %)  paved/unpaved {:5.1} %  unmatched pts {:3}  {:6.0} ms",
+            rep.name,
+            rep.length / 1000.0,
+            rep.agree * 100.0,
+            rep.agree_known * 100.0,
+            rep.paved_agree * 100.0,
+            rep.unmatched_points,
+            rep.latency_ms
+        );
+        let line = |m: &BTreeMap<TrackSurface, f64>| {
+            TrackSurface::ALL
+                .iter()
+                .filter_map(|c| m.get(c).map(|v| format!("{} {:.0}", c.name(), v)))
+                .collect::<Vec<_>>()
+                .join(" / ")
+        };
+        println!(
+            "    ours: {}\n    ref:  {}",
+            line(&rep.ours),
+            line(&rep.reference)
+        );
+        reports.push(rep);
     }
-    let (mode, sources) = (&backends[0].1, &backends[0].2);
-    let md = report_markdown(
-        &runs[0],
-        runs.get(1).map(Vec::as_slice),
-        &calibration,
-        mode,
-        sources,
-    );
+    let md = report_markdown(&reports, &calibration, &mode, &sources);
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -840,22 +758,20 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The tile source as the report states it, from the TileJSON dates (`Service::sources`).
+fn tiles_sources(tiles: Option<serde_json::Value>) -> String {
+    match tiles
+        .as_ref()
+        .and_then(|t| t["osm_replication_time"].as_str())
+    {
+        Some(d) => format!("tuiles VersaTiles (OSM du {d})"),
+        None => "tuiles VersaTiles".to_string(),
+    }
+}
+
 /// The data sources of a running service, from its `/health` (same wording as in-process).
 async fn http_sources(client: &reqwest::Client, base: &str) -> Option<String> {
     let url = format!("{}/health", base.trim_end_matches('/'));
     let v: serde_json::Value = client.get(url).send().await.ok()?.json().await.ok()?;
-    let src = &v["sources"];
-    let tiles = match src["tiles"]["osm_replication_time"].as_str() {
-        Some(d) => format!("tuiles VersaTiles (OSM du {d})"),
-        None => "tuiles VersaTiles".to_string(),
-    };
-    let i = &src["osm_index"];
-    Some(match i["source"].as_str() {
-        Some(source) => format!(
-            "{tiles} + index OSM `{source}` ({} voies, OSM du {})",
-            i["ways"].as_u64().unwrap_or(0),
-            i["replication_time"].as_str().unwrap_or("?")
-        ),
-        None => format!("{tiles} seules"),
-    })
+    Some(tiles_sources(Some(v["sources"]["tiles"].clone())))
 }

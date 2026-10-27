@@ -1,7 +1,6 @@
 //! End-to-end tests through the axum router, offline: the tiles come from
 //! `tests/fixtures/tiles` (real VersaTiles z14 tiles: the np655 stretch and two sea tiles of
-//! the Bay of Biscay) and the OSM index from `tests/fixtures/osm-index-np655.bin` (the ways
-//! of the same area, from a Geofabrik extract). © OpenStreetMap contributors, ODbL.
+//! the Bay of Biscay). © OpenStreetMap contributors, ODbL.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -30,14 +29,6 @@ fn offline_config() -> Config {
 
 fn offline_router() -> axum::Router {
     api::router(Arc::new(Service::new(offline_config()).unwrap()))
-}
-
-fn offline_router_with_index() -> axum::Router {
-    let config = Config {
-        osm_index: Some(fixtures().join("osm-index-np655.bin")),
-        ..offline_config()
-    };
-    api::router(Arc::new(Service::new(config).unwrap()))
 }
 
 async fn post(
@@ -214,50 +205,6 @@ fn agreement(s: &Stretch, r: &TraceResponse) -> (f64, f64) {
         }
     }
     (agree / total, paved_agree / total)
-}
-
-#[tokio::test]
-async fn with_the_osm_index_the_exact_tags_are_used() {
-    let s = stretch();
-    let mut req = tribly::request_json(&encoded(&s), "bicycle");
-    req["debug"] = serde_json::Value::Bool(true);
-    let (status, body) = post(offline_router_with_index(), req, true).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let r: TraceResponse = serde_json::from_value(body).unwrap();
-    assert_eq!(r.matched_points.len(), s.lat.len());
-    let joined = r
-        .edges
-        .iter()
-        .filter(|e| e.osm.as_ref().is_some_and(|a| a.osm_id.is_some()))
-        .count();
-    assert!(
-        joined * 10 >= r.edges.len() * 9,
-        "{joined} of {} edges joined",
-        r.edges.len()
-    );
-    let (agree, _) = agreement(&s, &r);
-    let (_, tiles_only) = post(
-        offline_router(),
-        tribly::request_json(&encoded(&s), "bicycle"),
-        false,
-    )
-    .await;
-    let (tiles_agree, _) = agreement(&s, &serde_json::from_value(tiles_only).unwrap());
-    assert!(
-        agree > 0.95 && agree >= tiles_agree,
-        "{agree} vs tiles only {tiles_agree}"
-    );
-
-    let resp = offline_router_with_index()
-        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let health: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(
-        health["sources"]["osm_index"]["ways"].as_u64().unwrap() > 100,
-        "{health}"
-    );
 }
 
 #[tokio::test]

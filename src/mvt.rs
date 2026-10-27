@@ -97,8 +97,7 @@ const GEOM_LINESTRING: i32 = 2;
 pub const STREETS_LAYER: &str = "streets";
 
 /// The attributes of a Shortbread 1.0 `streets` feature (the OSM tags that survived the
-/// schema; there is no OSM way id in the schema), or, with `osm_id`, the exact OSM tags of
-/// the way of the OSM index the street was joined to.
+/// schema; there is no OSM way id in the schema).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct StreetAttrs {
     pub kind: String,
@@ -113,22 +112,6 @@ pub struct StreetAttrs {
     pub tunnel: bool,
     pub oneway: bool,
     pub oneway_reverse: bool,
-    /// Set when the attributes are the OSM tags of this way (from the OSM index): `surface`
-    /// is then the raw OSM value, and the fields below are filled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub osm_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub smoothness: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mtb_scale: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sac_scale: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub foot: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub access: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vehicle: Option<String>,
 }
 
 /// One line of the `streets` layer, clipped to its tile, in global units.

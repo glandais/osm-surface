@@ -7,7 +7,6 @@ pub mod geo;
 pub mod matcher;
 pub mod mvt;
 pub mod network;
-pub mod osm;
 pub mod polyline;
 pub mod tiles;
 pub mod trace;

@@ -13,22 +13,19 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src/bin \
  && echo 'fn main() {}' > src/main.rs \
- && for b in eval inspect osm-index; do echo 'fn main() {}' > src/bin/$b.rs; done \
+ && for b in eval inspect; do echo 'fn main() {}' > src/bin/$b.rs; done \
  && touch src/lib.rs \
- && cargo build --release --locked --bin osm-surface --bin osm-index \
+ && cargo build --release --locked --bin osm-surface \
  && rm -rf src
 
 COPY src ./src
-RUN touch src/main.rs src/lib.rs src/bin/osm-index.rs \
- && cargo build --release --locked --bin osm-surface --bin osm-index \
+RUN touch src/main.rs src/lib.rs \
+ && cargo build --release --locked --bin osm-surface \
  && mkdir -p /data/tiles
 
 # --- runtime -------------------------------------------------------------------------------
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /src/target/release/osm-surface /usr/local/bin/osm-surface
-# To build the OSM index from an extract (see the README):
-#   docker run --rm -v osm-surface-data:/data --entrypoint osm-index osm-surface /data/x.osm.pbf /data/osm-index.bin
-COPY --from=build /src/target/release/osm-index /usr/local/bin/osm-index
 COPY --from=build --chown=65532:65532 /data /data
 ENV LISTEN_ADDR=0.0.0.0:8002 \
     CACHE_DIR=/data/tiles \

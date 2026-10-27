@@ -567,7 +567,6 @@ mod tests {
             &Corridor::new(grid, &line, 200.0),
             mode,
             AccessRules::France,
-            None,
         )
     }
 
