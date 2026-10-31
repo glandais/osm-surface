@@ -120,7 +120,7 @@ impl TileStore {
             }
         }
         if self.offline {
-            // Not a definitive "no street here" (400/171): a 503 that tribly retries later.
+            // Not a definitive "no street here" (400/171): a 503 that pedalons retries later.
             return Err(TileError::Unavailable(
                 name,
                 "not cached (offline mode)".into(),

@@ -3,7 +3,7 @@
 Microservice Rust qui remplace, à l'identique du point de vue de son client, l'endpoint
 `trace_attributes` de Valhalla tel que servi par Stadia Maps
 (<https://docs.stadiamaps.com/routing/trace-attributes/>), pour le calcul de la surface des traces
-de Pédalons (backend `tribly`, `StadiaTraceAttributesClient` / `TraceSurfaceComputer`).
+de Pédalons (backend `pedalons`, `StadiaTraceAttributesClient` / `TraceSurfaceComputer`).
 
 Les données viennent des tuiles vectorielles **VersaTiles Shortbread 1.0** (OpenStreetMap,
 `https://tiles.versatiles.org/tiles/osm/{z}/{x}/{y}`, zoom 14), téléchargées à la demande et mises
@@ -50,16 +50,16 @@ GET  /health
    même classe de rue : `surface`, `use`, `cycle_lane`, `road_class`, `unpaved`, `bridge`,
    `tunnel`, `length` en km, `begin_shape_index`, `end_shape_index`), `matched_points` (un par point
    envoyé : `type`, `edge_index`, `distance_along_edge` en **fraction** 0..1 de l'arête, `lat`,
-   `lon`, `distance_from_trace_point`). `osm_changeset` n'est pas fourni (tribly l'accepte nul).
+   `lon`, `distance_from_trace_point`). `osm_changeset` n'est pas fourni (pedalons l'accepte nul).
    Réponse gzip (ou brotli) si le client l'accepte. Les arêtes couvrent la forme sans trou, même
    sur un saut entre deux rues non reliées : la première moitié du saut va à la rue quittée,
    la seconde à la rue atteinte. Seul le segment entre deux morceaux séparés par un point
-   `unmatched` reste hors arête, et tribly le compte de toute façon comme inconnu.
+   `unmatched` reste hors arête, et pedalons le compte de toute façon comme inconnu.
 
-Les distances le long de `shape` sont calculées comme tribly les recalcule (haversine sur les
+Les distances le long de `shape` sont calculées comme pedalons les recalcule (haversine sur les
 coordonnées arrondies au 1e-6), et la forme est monotone le long de la trace : la projection de
-tribly (`TraceSurfaceProjection`, garde-fou 1,2 × distance + 30 m) retombe sur les bonnes plages.
-`tribly.rs` en est un portage (avec `SurfaceRanges` et `TrackSurface`) utilisé par les tests et par
+pedalons (`TraceSurfaceProjection`, garde-fou 1,2 × distance + 30 m) retombe sur les bonnes plages.
+`pedalons.rs` en est un portage (avec `SurfaceRanges` et `TrackSurface`) utilisé par les tests et par
 l'outil d'évaluation.
 
 ### Erreurs (format Valhalla)
@@ -77,8 +77,8 @@ l'outil d'évaluation.
 | 171 | aucune rue près de la trace (en mer…) |
 | 444 | des rues, mais aucun point envoyé n'a pu être apparié (ou trace qui traverse l'antiméridien, non gérée) |
 
-tribly traite {123, 171, 443, 444, 154} comme définitifs (la tranche reste inconnue). Quand les
-tuiles ne peuvent pas être chargées, la réponse est un **503** : tribly le voit comme transitoire et
+pedalons traite {123, 171, 443, 444, 154} comme définitifs (la tranche reste inconnue). Quand les
+tuiles ne peuvent pas être chargées, la réponse est un **503** : pedalons le voit comme transitoire et
 réessaiera plus tard. C'est le cas d'un serveur injoignable, d'un 404, d'une réponse qui n'est pas
 une tuile, d'un délai `TILES_DEADLINE_SECS` dépassé, d'une tuile absente du cache en
 `TILES_OFFLINE`, ou de tous les créneaux d'appariement occupés au-delà de 13 s. Deux points
@@ -97,7 +97,7 @@ trouvé, `sac_scale` donne `path`, sinon une valeur par défaut selon la classe 
 Shortbread ne garde du tag `surface` que `paved` / `unpaved` et ne garde ni `smoothness`, ni
 `mtb:scale`, ni `sac_scale`. D'où :
 
-| Shortbread `streets` | Surface Valhalla rendue | Classe tribly |
+| Shortbread `streets` | Surface Valhalla rendue | Classe pedalons |
 |---|---|---|
 | `surface=paved` | `paved_smooth` | PAVED |
 | `surface=unpaved`, `bicycle=designated` (voie verte), tracktype absent ou grade1-3 | `compacted` | GRAVEL |
@@ -177,9 +177,9 @@ des tuiles va dans le volume `/data`. Compter quelques Mo de
 cache par centaine de km de parcours (≈ 11 Mo pour les trois parcours d'évaluation autour de
 Nantes). L'image de build est épinglée (`rust:1.99.1-slim-bookworm`).
 
-## Brancher sur tribly
+## Brancher sur pedalons
 
-Le client `stadiamaps-trace` de tribly a sa propre URL (par défaut celle du planificateur Stadia).
+Le client `stadiamaps-trace` de pedalons a sa propre URL (par défaut celle du planificateur Stadia).
 Il suffit de la surcharger côté backend :
 
 ```bash
@@ -219,10 +219,10 @@ cargo run --release --bin eval -- --url http://localhost:8002   # contre un serv
 EVAL_VERBOSE=1 cargo run --release --bin eval          # liste tous les écarts ≥ 40 m
 ```
 
-Pour chaque `testdata/*.route.json`, l'outil construit la requête exacte de tribly à partir de
+Pour chaque `testdata/*.route.json`, l'outil construit la requête exacte de pedalons à partir de
 `tracks[0].line.coordinates` (polyline6, `bicycle`, `map_snap`, mêmes filtres), la projette comme
-tribly (`TraceSurfaceComputer` → `TraceSurfaceProjection` → `SurfaceRanges`, `MIN_SPAN_M` = 20 →
-`TrackSurface`) et compare mètre par mètre aux plages que tribly a calculées à partir des vraies
+pedalons (`TraceSurfaceComputer` → `TraceSurfaceProjection` → `SurfaceRanges`, `MIN_SPAN_M` = 20 →
+`TrackSurface`) et compare mètre par mètre aux plages que pedalons a calculées à partir des vraies
 réponses Stadia. Rapport complet : [`eval/report.md`](eval/report.md) (répartition, matrice de
 confusion, 10 plus grands écarts avec la rue appariée, nos plages inconnues, table de calibration).
 
@@ -265,7 +265,7 @@ Tout tourne hors ligne. Les tests unitaires couvrent :
 - la dérivation Valhalla depuis les attributs Shortbread (surface, `use`, `cycle_lane`, accès) ;
 - l'appariement sur un réseau synthétique, la couverture des sauts par les arêtes et le 444
   quand seuls des points densifiés sont appariés ;
-- le nettoyage du cache et le portage de la projection tribly.
+- le nettoyage du cache et le portage de la projection pedalons.
 
 Les tests d'intégration passent par le routeur axum (`tests/api.rs`). Ils utilisent 6 km du
 parcours np-655, avec ses 3 tuiles réelles :
@@ -297,7 +297,7 @@ tronçon, `CANDS=1` pour les candidats), `… prefetch|stats <route.json>…`,
   (`cobblestone`) et les valeurs que Shortbread met à nul (`wood`…) prennent la valeur par défaut
   du type de voie.
 - **Voies absentes** : `highway=bridleway` n'est pas dans les tuiles. Ces passages sortent
-  `unmatched` (inconnus pour tribly).
+  `unmatched` (inconnus pour pedalons).
 - **Fraîcheur** : les tuiles VersaTiles sont reconstruites de temps en temps (OSM du 2026-06-07
   pour celles utilisées ici, date donnée par `/health`). Les modifications OSM plus récentes n'y
   sont pas.
@@ -308,5 +308,5 @@ tronçon, `CANDS=1` pour les candidats), `… prefetch|stats <route.json>…`,
 - **Pas d'`osm_changeset`**, ni `admins`, `confidence_score`, `names`, `way_id`, `speed`…
 - **Antiméridien** : une trace qui le traverse est refusée (444).
 - **Un seul fournisseur de tuiles** : si `tiles.versatiles.org` est injoignable et que les tuiles ne
-  sont pas en cache, 503 (tribly réessaie). Pour s'en affranchir, VersaTiles publie aussi le fichier
+  sont pas en cache, 503 (pedalons réessaie). Pour s'en affranchir, VersaTiles publie aussi le fichier
   `.versatiles` complet, que l'on peut servir soi-même et désigner par `TILES_URL`.

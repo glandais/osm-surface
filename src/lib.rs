@@ -10,5 +10,5 @@ pub mod network;
 pub mod polyline;
 pub mod tiles;
 pub mod trace;
-pub mod tribly;
+pub mod pedalons;
 pub mod valhalla;

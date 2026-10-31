@@ -1,4 +1,4 @@
-//! A port of what the Pédalons backend (tribly) does with a `trace_attributes` answer:
+//! A port of what the Pédalons backend (pedalons) does with a `trace_attributes` answer:
 //! `TraceSurfaceComputer` (slices), `TraceSurfaceProjection` (answer back onto the sent
 //! points), `SurfaceRanges` (normalisation) and `TrackSurface` (classes). Used by the eval
 //! tool and the tests to check that the answers of this service project as Stadia's do.
@@ -17,7 +17,7 @@ pub const UNKNOWN: &str = "unknown";
 const SLACK: f64 = 1.2;
 const ABS_SLACK_M: f64 = 30.0;
 
-/// The attributes tribly asks for.
+/// The attributes pedalons asks for.
 pub const ATTRIBUTES: [&str; 10] = [
     "edge.surface",
     "edge.use",
@@ -356,12 +356,12 @@ pub fn normalize<V: PartialEq + Clone>(
     merge(out)
 }
 
-/// How a call to the provider went, as tribly sees it.
+/// How a call to the provider went, as pedalons sees it.
 pub enum CallResult {
     Ok(Box<TraceResponse>),
     /// A 400 with one of the definitive codes: the slice is unknown.
     Definitive(i32),
-    /// Anything else: tribly fails the whole track and retries later.
+    /// Anything else: pedalons fails the whole track and retries later.
     Transient(String),
 }
 
@@ -499,9 +499,9 @@ mod tests {
         }
     }
 
-    /// The cases of tribly's TraceSurfaceProjectionTest.
+    /// The cases of pedalons's TraceSurfaceProjectionTest.
     #[test]
-    fn projection_cases_of_tribly() {
+    fn projection_cases_of_pedalons() {
         let (lat, lon, _) = line(3, 100.0);
         let r = response(&lat, &lon, vec![at(0, 0.0), at(0, 0.5), at(0, 1.0)]);
         let out = project(&[0.0, 50.0, 100.0], &r, |_, e| e.surface.clone());

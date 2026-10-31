@@ -1,6 +1,6 @@
 //! Evaluation against Stadia Maps: for each Pédalons route file (`*.route.json`), the exact
-//! request tribly would send, our answer, tribly's projection of it into surface ranges, and
-//! the comparison with the ranges tribly computed from the real Stadia answers.
+//! request pedalons would send, our answer, pedalons's projection of it into surface ranges, and
+//! the comparison with the ranges pedalons computed from the real Stadia answers.
 //!
 //! ```text
 //! eval [--data testdata] [--url http://localhost:8002] [--out eval/report.md] [--costing bicycle]
@@ -10,7 +10,7 @@
 use osm_surface::config::Config;
 use osm_surface::mvt::StreetAttrs;
 use osm_surface::trace::{Service, TraceOutput, TraceResponse};
-use osm_surface::tribly::{self, CallResult, Range, TrackSurface};
+use osm_surface::pedalons::{self, CallResult, Range, TrackSurface};
 use osm_surface::valhalla;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -83,7 +83,7 @@ impl Backend {
         let started = Instant::now();
         match self {
             Backend::InProcess(service) => {
-                let req = tribly::request(encoded, costing);
+                let req = pedalons::request(encoded, costing);
                 match service.trace_attributes(&req).await {
                     Ok(TraceOutput {
                         response,
@@ -98,14 +98,14 @@ impl Backend {
                         };
                         (CallResult::Ok(Box::new(response)), Some(answer))
                     }
-                    Err(e) if e.status == 400 && tribly::DEFINITIVE_CODES.contains(&e.code) => {
+                    Err(e) if e.status == 400 && pedalons::DEFINITIVE_CODES.contains(&e.code) => {
                         (CallResult::Definitive(e.code), None)
                     }
                     Err(e) => (CallResult::Transient(e.to_string()), None),
                 }
             }
             Backend::Http(client, base) => {
-                let mut body = tribly::request_json(encoded, costing);
+                let mut body = pedalons::request_json(encoded, costing);
                 body["debug"] = serde_json::Value::Bool(true);
                 let resp = client
                     .post(format!(
@@ -142,7 +142,7 @@ impl Backend {
                         .ok()
                         .and_then(|v| v["error_code"].as_i64())
                         .unwrap_or(-1) as i32;
-                    if status == 400 && tribly::DEFINITIVE_CODES.contains(&code) {
+                    if status == 400 && pedalons::DEFINITIVE_CODES.contains(&code) {
                         (CallResult::Definitive(code), None)
                     } else {
                         (
@@ -272,7 +272,7 @@ async fn evaluate(
     let handle = tokio::runtime::Handle::current();
     let started = Instant::now();
     let (cover, slices) =
-        tribly::compute(&route.lat, &route.lon, &route.dist, costing, |enc, c| {
+        pedalons::compute(&route.lat, &route.lon, &route.dist, costing, |enc, c| {
             let (result, answer) =
                 tokio::task::block_in_place(|| handle.block_on(backend.call(enc, c)));
             answers.push(answer);
@@ -299,7 +299,7 @@ async fn evaluate(
         let d: Vec<f64> = (s.i0..=s.i1)
             .map(|i| route.dist[i] - route.dist[s.i0])
             .collect();
-        for r in tribly::project(&d, resp, |e, _| Some(e)) {
+        for r in pedalons::project(&d, resp, |e, _| Some(e)) {
             let (a, b) = (
                 s.start.max(r.from + route.dist[s.i0]),
                 s.end.min(r.to + route.dist[s.i0]),
@@ -513,7 +513,7 @@ fn report_markdown(
     writeln!(s, "# Évaluation osm-surface vs Stadia Maps\n").ok();
     writeln!(
         s,
-        "Généré par `cargo run --release --bin eval` ({mode}). Référence : plages de surface calculées par tribly \
+        "Généré par `cargo run --release --bin eval` ({mode}). Référence : plages de surface calculées par pedalons \
          à partir des vraies réponses Stadia (Valhalla) ; nos plages passent par le même portage de \
          `TraceSurfaceProjection` + `SurfaceRanges` (MIN_SPAN_M = 20) + `TrackSurface`.\n"
     )

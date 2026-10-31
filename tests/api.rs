@@ -9,7 +9,7 @@ use osm_surface::api;
 use osm_surface::config::Config;
 use osm_surface::polyline;
 use osm_surface::trace::{Service, TraceResponse};
-use osm_surface::tribly::{self, CallResult, Range, TrackSurface};
+use osm_surface::pedalons::{self, CallResult, Range, TrackSurface};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -75,7 +75,7 @@ struct Stretch {
     reference: Vec<Range<TrackSurface>>,
 }
 
-/// 6 km of the np-655 test route (26-32 km), with the ranges tribly computed from Stadia.
+/// 6 km of the np-655 test route (26-32 km), with the ranges pedalons computed from Stadia.
 fn stretch() -> Stretch {
     let v: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(fixtures().join("np655-26-32km.json")).unwrap(),
@@ -120,12 +120,12 @@ async fn health() {
 }
 
 #[tokio::test]
-async fn a_tribly_request_projects_like_stadia() {
+async fn a_pedalons_request_projects_like_stadia() {
     let s = stretch();
     let n = s.lat.len();
     let (status, body) = post(
         offline_router(),
-        tribly::request_json(&encoded(&s), "bicycle"),
+        pedalons::request_json(&encoded(&s), "bicycle"),
         true,
     )
     .await;
@@ -178,10 +178,10 @@ async fn a_tribly_request_projects_like_stadia() {
     assert!(paved_agree > 0.95, "paved/unpaved agreement {paved_agree}");
 }
 
-/// tribly's projection of an answer, against the ranges it computed from Stadia's answer:
+/// pedalons's projection of an answer, against the ranges it computed from Stadia's answer:
 /// the class agreement and the paved / unpaved agreement.
 fn agreement(s: &Stretch, r: &TraceResponse) -> (f64, f64) {
-    let (cover, _) = tribly::compute(&s.lat, &s.lon, &s.dist, "bicycle", |_, _| {
+    let (cover, _) = pedalons::compute(&s.lat, &s.lon, &s.dist, "bicycle", |_, _| {
         CallResult::Ok(Box::new(r.clone()))
     })
     .unwrap();
@@ -211,7 +211,7 @@ fn agreement(s: &Stretch, r: &TraceResponse) -> (f64, f64) {
 async fn offline_a_trace_outside_the_cache_is_a_503_not_a_definitive_171() {
     let (status, err) = post(
         offline_router(),
-        tribly::request_json(
+        pedalons::request_json(
             &polyline::encode(&[(48.85, 2.35), (48.851, 2.35)]),
             "bicycle",
         ),
@@ -249,20 +249,20 @@ async fn valhalla_errors() {
     let s = stretch();
     let one = polyline::encode(&[(s.lat[0], s.lon[0])]);
     let cases = vec![
-        (tribly::request_json(&one, "bicycle"), 123),
-        (tribly::request_json(&encoded(&s), "spaceship"), 125),
+        (pedalons::request_json(&one, "bicycle"), 123),
+        (pedalons::request_json(&encoded(&s), "spaceship"), 125),
         // in the Bay of Biscay: no tile, no street
         (
-            tribly::request_json(&polyline::encode(&[(46.0, -4.0), (46.01, -4.0)]), "bicycle"),
+            pedalons::request_json(&polyline::encode(&[(46.0, -4.0), (46.01, -4.0)]), "bicycle"),
             171,
         ),
         // 2.2 degrees of latitude: more than 200 km
         (
-            tribly::request_json(&polyline::encode(&[(45.0, -1.0), (47.2, -1.0)]), "bicycle"),
+            pedalons::request_json(&polyline::encode(&[(45.0, -1.0), (47.2, -1.0)]), "bicycle"),
             154,
         ),
         (
-            tribly::request_json(&polyline::encode(&vec![(47.2, -1.5); 16_001]), "bicycle"),
+            pedalons::request_json(&polyline::encode(&vec![(47.2, -1.5); 16_001]), "bicycle"),
             153,
         ),
         (serde_json::json!({"costing": "bicycle"}), 126),
@@ -287,7 +287,7 @@ async fn valhalla_errors() {
 }
 
 #[tokio::test]
-async fn an_unreachable_tile_server_is_a_503_for_tribly_to_retry() {
+async fn an_unreachable_tile_server_is_a_503_for_pedalons_to_retry() {
     let config = Config {
         cache_dir: None,
         tiles_url: "http://127.0.0.1:9/{z}/{x}/{y}".into(),
@@ -296,9 +296,9 @@ async fn an_unreachable_tile_server_is_a_503_for_tribly_to_retry() {
     };
     let router = api::router(Arc::new(Service::new(config).unwrap()));
     let s = stretch();
-    let (status, err) = post(router, tribly::request_json(&encoded(&s), "bicycle"), false).await;
+    let (status, err) = post(router, pedalons::request_json(&encoded(&s), "bicycle"), false).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{err}");
-    assert!(!tribly::DEFINITIVE_CODES.contains(&(err["error_code"].as_i64().unwrap() as i32)));
+    assert!(!pedalons::DEFINITIVE_CODES.contains(&(err["error_code"].as_i64().unwrap() as i32)));
 }
 
 #[tokio::test]
@@ -307,7 +307,7 @@ async fn two_identical_points_answer_an_empty_200() {
     let p = (s.lat[3], s.lon[3]);
     let (status, body) = post(
         offline_router(),
-        tribly::request_json(&polyline::encode(&[p, p]), "bicycle"),
+        pedalons::request_json(&polyline::encode(&[p, p]), "bicycle"),
         false,
     )
     .await;

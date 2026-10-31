@@ -16,7 +16,7 @@ use std::time::Instant;
 /// Valhalla's request limits as measured on Stadia Maps.
 pub const MAX_POINTS: usize = 16_000;
 pub const MAX_DISTANCE_M: f64 = 200_000.0;
-/// What a request may wait in all before its matching starts (tribly reads for 15 s).
+/// What a request may wait in all before its matching starts (pedalons reads for 15 s).
 const MATCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(13);
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -131,7 +131,7 @@ impl ApiError {
     }
 
     pub fn unavailable(message: impl Into<String>) -> Self {
-        // Not a Valhalla code: tribly retries anything else than its definitive 400s.
+        // Not a Valhalla code: pedalons retries anything else than its definitive 400s.
         Self {
             status: 503,
             code: 503,
@@ -398,7 +398,7 @@ impl Service {
             })?;
         let tiles_ms = started.elapsed().as_millis() as u64;
         // The permit moves into the blocking task: a client that gives up does not free it
-        // while the computation still runs. Waiting for one is bounded by tribly's patience.
+        // while the computation still runs. Waiting for one is bounded by pedalons's patience.
         let wait = MATCH_BUDGET.saturating_sub(started.elapsed());
         let permit = tokio::time::timeout(wait, self.matches.clone().acquire_owned())
             .await
@@ -442,7 +442,7 @@ impl Service {
 pub fn describe(net: &Network, m: &Matched, trace: &Trace) -> Result<TraceOutput, ApiError> {
     let n_input = trace.points.len();
     // Only the input points count: a densified observation matched between unmatched input
-    // points would answer a one-point shape that tribly cannot use.
+    // points would answer a one-point shape that pedalons cannot use.
     let any_input = m
         .obs
         .iter()
@@ -521,7 +521,7 @@ pub fn describe(net: &Network, m: &Matched, trace: &Trace) -> Result<TraceOutput
             Some(Step::Jump) => {
                 // Between two streets the network does not join: the first half of the jump
                 // belongs to the street left, the second to the street reached, so that the
-                // edges cover the whole shape (as Valhalla's do) and tribly leaves no gap.
+                // edges cover the whole shape (as Valhalla's do) and pedalons leaves no gap.
                 if let Some(next) = m.chosen.get(t + 1).copied().flatten() {
                     push(
                         &mut shape,

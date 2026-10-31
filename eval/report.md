@@ -1,6 +1,6 @@
 # Évaluation osm-surface vs Stadia Maps
 
-Généré par `cargo run --release --bin eval` (en processus). Référence : plages de surface calculées par tribly à partir des vraies réponses Stadia (Valhalla) ; nos plages passent par le même portage de `TraceSurfaceProjection` + `SurfaceRanges` (MIN_SPAN_M = 20) + `TrackSurface`.
+Généré par `cargo run --release --bin eval` (en processus). Référence : plages de surface calculées par pedalons à partir des vraies réponses Stadia (Valhalla) ; nos plages passent par le même portage de `TraceSurfaceProjection` + `SurfaceRanges` (MIN_SPAN_M = 20) + `TrackSurface`.
 
 Sources : tuiles VersaTiles (OSM du 2026-06-07T23:59:58Z)
 

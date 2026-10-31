@@ -1,7 +1,7 @@
 //! Geodesy helpers: haversine distances and the Web Mercator "global unit" grid
 //! the vector tiles are drawn on.
 
-/// Mean Earth radius used by tribly's `GeoDistance` (and most haversine code).
+/// Mean Earth radius used by pedalons's `GeoDistance` (and most haversine code).
 pub const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
 /// Equatorial circumference of the Web Mercator sphere (EPSG:3857).
