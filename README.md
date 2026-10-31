@@ -177,6 +177,10 @@ des tuiles va dans le volume `/data`. Compter quelques Mo de
 cache par centaine de km de parcours (≈ 11 Mo pour les trois parcours d'évaluation autour de
 Nantes). L'image de build est épinglée (`rust:1.99.1-slim-bookworm`).
 
+L'action GitHub `.github/workflows/docker.yml` publie l'image sur `ghcr.io/glandais/osm-surface` :
+`develop` et `latest` à chaque push sur `develop`, `1.2.3` et `1.2` pour un tag `v1.2.3`, et
+`sha-<commit>` dans tous les cas. Sur une pull request, l'image est seulement construite.
+
 ## Brancher sur pedalons
 
 Le client `stadiamaps-trace` de pedalons a sa propre URL (par défaut celle du planificateur Stadia).
