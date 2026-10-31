@@ -10,7 +10,7 @@ Instead of a Valhalla graph, it reads VersaTiles **Shortbread 1.0** vector tiles
 layer), fetched on demand and cached. The response must stay byte-for-byte compatible with what
 pedalons expects from Stadia (fields, Valhalla error codes, 503 for transient failures).
 
-The README is in French and is the detailed spec (attribute derivation tables, error codes, env
+The README is the detailed spec (attribute derivation tables, error codes, env
 vars, known limits, eval results). Code and doc comments are in English. Keep the README in sync
 when behaviour, env vars, error codes or eval figures change.
 
