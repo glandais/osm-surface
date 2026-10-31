@@ -179,7 +179,8 @@ Nantes). L'image de build est épinglée (`rust:1.99.1-slim-bookworm`).
 
 L'action GitHub `.github/workflows/docker.yml` publie l'image sur `ghcr.io/glandais/osm-surface` :
 `develop` et `latest` à chaque push sur `develop`, `1.2.3` et `1.2` pour un tag `v1.2.3`, et
-`sha-<commit>` dans tous les cas. Sur une pull request, l'image est seulement construite. Rien
+`sha-<commit>` dans tous les cas. L'image est multi-plateforme, `linux/amd64` et `linux/arm64`
+(Mac Apple Silicon, Graviton…), chacune construite sur un runner natif. Sur une pull request, l'image est seulement construite. Rien
 n'est construit si `cargo test` ou `cargo clippy` (avertissements refusés) échoue.
 
 ## Brancher sur pedalons
