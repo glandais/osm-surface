@@ -1,7 +1,7 @@
-//! A port of what the Pédalons backend (pedalons) does with a `trace_attributes` answer:
+//! A port of what the client of this service does with a `trace_attributes` answer:
 //! `TraceSurfaceComputer` (slices), `TraceSurfaceProjection` (answer back onto the sent
 //! points), `SurfaceRanges` (normalisation) and `TrackSurface` (classes). Used by the eval
-//! tool and the tests to check that the answers of this service project as Stadia's do.
+//! tool and the tests to check that the answers of this service project as Valhalla's do.
 
 use crate::geo;
 use crate::polyline;
@@ -17,7 +17,7 @@ pub const UNKNOWN: &str = "unknown";
 const SLACK: f64 = 1.2;
 const ABS_SLACK_M: f64 = 30.0;
 
-/// The attributes pedalons asks for.
+/// The attributes the client asks for.
 pub const ATTRIBUTES: [&str; 10] = [
     "edge.surface",
     "edge.use",
@@ -356,12 +356,12 @@ pub fn normalize<V: PartialEq + Clone>(
     merge(out)
 }
 
-/// How a call to the provider went, as pedalons sees it.
+/// How a call to the provider went, as the client sees it.
 pub enum CallResult {
     Ok(Box<TraceResponse>),
     /// A 400 with one of the definitive codes: the slice is unknown.
     Definitive(i32),
-    /// Anything else: pedalons fails the whole track and retries later.
+    /// Anything else: the client fails the whole track and retries later.
     Transient(String),
 }
 
@@ -499,9 +499,9 @@ mod tests {
         }
     }
 
-    /// The cases of pedalons's TraceSurfaceProjectionTest.
+    /// The cases of the client's TraceSurfaceProjectionTest.
     #[test]
-    fn projection_cases_of_pedalons() {
+    fn projection_cases_of_the_client() {
         let (lat, lon, _) = line(3, 100.0);
         let r = response(&lat, &lon, vec![at(0, 0.0), at(0, 0.5), at(0, 1.0)]);
         let out = project(&[0.0, 50.0, 100.0], &r, |_, e| e.surface.clone());

@@ -1,9 +1,10 @@
 # osm-surface
 
 A Rust microservice that replaces, identically from its client's point of view, Valhalla's
-`trace_attributes` endpoint as served by Stadia Maps
-(<https://docs.stadiamaps.com/routing/trace-attributes/>), for computing the surface of Pédalons
-traces (`pedalons` backend, `StadiaTraceAttributesClient` / `TraceSurfaceComputer`).
+`trace_attributes` map-matching endpoint
+(<https://valhalla.github.io/valhalla/api/map-matching/>), for computing the surface along GPS
+traces. Its client cuts a trace into slices, sends each one and projects the answer back onto the
+trace as surface ranges; `src/client.rs` ports that logic for the tests and the evaluation.
 
 The data comes from **VersaTiles Shortbread 1.0** vector tiles (OpenStreetMap,
 `https://tiles.versatiles.org/tiles/osm/{z}/{x}/{y}`, zoom 14), downloaded on demand and cached.
@@ -11,20 +12,20 @@ No Valhalla graph to build, no OSM extract to download or keep up to date.
 
 The tiles are the only source. Shortbread reduces `surface` to `paved` / `unpaved`, has neither
 `smoothness`, `mtb:scale`, `sac_scale`, `access` nor `bridleway`s, and its data is a few months
-old. On the evaluation routes, agreement with Stadia is **86 to 94 %** per surface class and
+old. On the evaluation routes, agreement with Valhalla is **86 to 94 %** per surface class and
 **98 to 99 %** on paved / unpaved (see *Evaluation*).
 
 ## What the service does
 
 ```
-POST /trace_attributes/v1      (Stadia path; /trace_attributes accepted too)
+POST /trace_attributes        (Valhalla path; /trace_attributes/v1 accepted too)
 GET  /health
 ```
 
 1. **Request**: `encoded_polyline` (polyline6, lat/lon × 1e6) or `shape: [{lat, lon}]`,
    `costing` (`bicycle`, `pedestrian`, `auto` and their variants), `shape_match` (everything is
    handled as `map_snap`), `filters` (`include` / `exclude`), optional `trace_options.search_radius`.
-   The `Authorization: Stadia-Auth <key>` header is accepted and ignored.
+   An `Authorization` header (API key) is accepted and ignored.
 2. **Tiles**: those touching a 100 m corridor around the trace (≈ 40 tiles for 90 km), plus an
    in-memory LRU of decoded `streets` layers. At most 8 simultaneous downloads, one retry on a
    transient error, explicit User-Agent. The disk cache keeps raw tiles for 7 days and reuses them
@@ -49,16 +50,15 @@ GET  /health
    the same street class: `surface`, `use`, `cycle_lane`, `road_class`, `unpaved`, `bridge`,
    `tunnel`, `length` in km, `begin_shape_index`, `end_shape_index`), `matched_points` (one per
    point sent: `type`, `edge_index`, `distance_along_edge` as a **fraction** 0..1 of the edge,
-   `lat`, `lon`, `distance_from_trace_point`). `osm_changeset` is not provided (pedalons accepts it
-   null). Gzip (or brotli) response if the client accepts it. Edges cover the shape without gaps,
+   `lat`, `lon`, `distance_from_trace_point`). `osm_changeset` is not provided (null). Gzip (or brotli) response if the client accepts it. Edges cover the shape without gaps,
    even over a jump between two unconnected streets: the first half of the jump goes to the street
    being left, the second to the street reached. Only the segment between two pieces separated by
-   an `unmatched` point stays outside any edge, and pedalons counts it as unknown anyway.
+   an `unmatched` point stays outside any edge, and the client counts it as unknown anyway.
 
-Distances along `shape` are computed the way pedalons recomputes them (haversine on coordinates
-rounded to 1e-6), and the shape is monotone along the trace: pedalons's projection
+Distances along `shape` are computed the way the client recomputes them (haversine on
+coordinates rounded to 1e-6), and the shape is monotone along the trace: the client's projection
 (`TraceSurfaceProjection`, safeguard 1.2 × distance + 30 m) lands on the right ranges.
-`pedalons.rs` is a port of it (with `SurfaceRanges` and `TrackSurface`) used by the tests and by
+`client.rs` is a port of it (with `SurfaceRanges` and `TrackSurface`) used by the tests and by
 the evaluation tool.
 
 ### Errors (Valhalla format)
@@ -72,15 +72,15 @@ the evaluation tool.
 | 124 / 125 | `costing` missing / unknown |
 | 126 | neither `encoded_polyline` nor `shape` (or invalid polyline) |
 | 153 | more than 16,000 points |
-| 154 | more than 200 km (or invalid coordinate, like Stadia) |
+| 154 | more than 200 km (or invalid coordinate) |
 | 171 | no street near the trace (at sea…) |
 | 444 | streets, but none of the points sent could be matched (or trace crossing the antimeridian, not supported) |
 
-pedalons treats {123, 171, 443, 444, 154} as final (the chunk stays unknown). When the tiles
-cannot be loaded, the response is a **503**: pedalons sees it as transient and will retry later.
+The client treats {123, 171, 443, 444, 154} as final (the chunk stays unknown). When the tiles
+cannot be loaded, the response is a **503**: the client sees it as transient and retries later.
 That is the case for an unreachable server, a 404, a response that is not a tile, an exceeded
 `TILES_DEADLINE_SECS` deadline, a tile missing from the cache with `TILES_OFFLINE`, or all matching
-slots busy for more than 13 s. Two identical points: empty 200, like Stadia.
+slots busy for more than 13 s. Two identical points: empty 200, like Valhalla.
 
 ## Surface: Valhalla's rules
 
@@ -95,7 +95,7 @@ found, `sac_scale` gives `path`, otherwise a default value depending on the road
 Shortbread only keeps `paved` / `unpaved` from the `surface` tag and keeps neither `smoothness`,
 `mtb:scale` nor `sac_scale`. Hence:
 
-| Shortbread `streets` | Valhalla surface returned | pedalons class |
+| Shortbread `streets` | Valhalla surface returned | Surface class |
 |---|---|---|
 | `surface=paved` | `paved_smooth` | PAVED |
 | `surface=unpaved`, `bicycle=designated` (greenway), tracktype missing or grade1-3 | `compacted` | GRAVEL |
@@ -114,7 +114,7 @@ Shortbread only keeps `paved` / `unpaved` from the `surface` tag and keeps neith
 The rules for `unpaved` are the only choices specific to this service: the exact value being lost,
 the most likely one is taken (OSM usage of `surface` per way type, checked on the evaluation
 routes). The calibration table of `eval/report.md` shows, for each combination of Shortbread
-attributes, what Stadia sees there.
+attributes, what Valhalla sees there.
 
 **`use`**: `road`, `ramp` (links), `track`, `driveway`, `alley`, `parking_aisle`,
 `emergency_access`, `drive_through`, `living_street`, `service_road`, `cycleway`, `footway`,
@@ -180,39 +180,13 @@ The GitHub Action `.github/workflows/docker.yml` publishes the image to
 a pull request, the image is only built. Nothing is built if `cargo test` or `cargo clippy`
 (warnings denied) fails.
 
-## Plugging into pedalons
+## Attribution (ODbL)
 
-pedalons's `stadiamaps-trace` client has its own URL (by default the Stadia routing one). It is
-enough to override it on the backend side:
-
-```bash
-QUARKUS_REST_CLIENT_STADIAMAPS_TRACE_URL=http://<host>:8002
-```
-
-- Keep `STADIAMAPS_API_KEY` **non-empty**: the surface worker is disabled when the key is empty,
-  and the client always sends `Authorization: Stadia-Auth <key>` (ignored here). The router and
-  the geocoder keep using Stadia.
-- The client read timeout (15 s) is generous: 50 to 100 ms per request when the tiles are cached,
-  ≈ 0.9 s for the 40 tiles of the 90 km route downloaded cold (a few seconds for a 190 km chunk in
-  a region never seen before).
-- Surfaces already stored (computed by Stadia) remain valid; a full recomputation is not needed,
-  but new traces will get slightly different ranges (see *Evaluation*).
-- Cost: no more Stadia credits for the surface (20 credits per 190 km chunk until now).
-
-### Attribution (ODbL)
-
-The data is OpenStreetMap's (ODbL licence), via the VersaTiles tiles. The UI must display
-"© OpenStreetMap contributors" with a link to <https://www.openstreetmap.org/copyright> wherever the
-surface is shown. This is already the case (`routes.surface.attribution` on the web,
-`routes.surfaceDetail.attribution` on mobile, link to the copyright page); to do at switch-over
-time:
-
-- remove any mention of Stadia Maps as the source of the surface if there is one (none found in the
-  labels), and add "(ODbL)" to the credit to be explicit;
-- in the privacy policy, the surface no longer goes through Stadia: recorded traces no longer leave
-  our servers for this computation;
-- the stored surface ranges are derived from OSM: if they are ever redistributed as a database
-  (export, public API), it is under ODbL, with the same attribution.
+The data is OpenStreetMap's (ODbL licence), via the VersaTiles tiles. Any UI showing the surface
+must display "© OpenStreetMap contributors" with a link to
+<https://www.openstreetmap.org/copyright>. Surface ranges stored from this service's answers are
+derived from OSM: if they are ever redistributed as a database (export, public API), it is under
+ODbL, with the same attribution.
 
 ## Evaluation
 
@@ -222,14 +196,14 @@ cargo run --release --bin eval -- --url http://localhost:8002   # against a runn
 EVAL_VERBOSE=1 cargo run --release --bin eval          # list every disagreement ≥ 40 m
 ```
 
-For each `testdata/*.route.json`, the tool builds pedalons's exact request from
+For each `testdata/*.route.json`, the tool builds the client's exact request from
 `tracks[0].line.coordinates` (polyline6, `bicycle`, `map_snap`, same filters), projects it like
-pedalons (`TraceSurfaceComputer` → `TraceSurfaceProjection` → `SurfaceRanges`, `MIN_SPAN_M` = 20 →
-`TrackSurface`) and compares it metre by metre to the ranges pedalons computed from the real Stadia
+the client (`TraceSurfaceComputer` → `TraceSurfaceProjection` → `SurfaceRanges`, `MIN_SPAN_M` = 20 →
+`TrackSurface`) and compares it metre by metre to the ranges the client computed from real Valhalla
 answers. Full report: [`eval/report.md`](eval/report.md) (breakdown, confusion matrix, 10 largest
 disagreements with the matched street, our unknown ranges, calibration table).
 
-| Route | Length | Agreement (class) | Excluding Stadia unknown | Paved / unpaved | Latency |
+| Route | Length | Agreement (class) | Excluding Valhalla unknown | Paved / unpaved | Latency |
 |---|---:|---:|---:|---:|---:|
 | graymond-ride-138 | 90.2 km | **86.0 %** | 86.5 % | 98.1 % | ≈ 100 ms |
 | np-655-gravel | 52.2 km | **91.6 %** | 91.5 % | 99.0 % | ≈ 75 ms |
@@ -237,14 +211,14 @@ disagreements with the matched street, our unknown ranges, calibration table).
 
 OSM tiles from 2026-06-07. Before the review: 85.6 / 91.6 / 93.4 %.
 
-The reference is Stadia (Valhalla on an OSM from around late September 2026), not ground truth.
+The reference is Valhalla (on an OSM from around late September 2026), not ground truth.
 For paved versus unpaved, the tiles are enough. The remaining disagreements are mostly about the
 class of an unpaved way (GRAVEL, DIRT or PATH), and come from what the tiles do not say:
 
 - the surface reduced to `paved` / `unpaved` by Shortbread (≈ 60 % of the disagreements);
 - the age of the tiles (≈ 14 %);
 - `mtb:scale`, `smoothness`, `sac_scale` and `bridleway`s, missing from the tiles (≈ 10 %);
-- the rest: the reference itself (Stadia without a surface, or routed elsewhere since an OSM
+- the rest: the reference itself (Valhalla without a surface, or routed elsewhere since an OSM
   change) and the matching (parallel ways).
 
 The details are in the report and in *Known limits*.
@@ -267,13 +241,13 @@ Everything runs offline. The unit tests cover:
 - the Valhalla derivation from Shortbread attributes (surface, `use`, `cycle_lane`, access);
 - matching on a synthetic network, jump coverage by edges and the 444 when only densified points
   are matched;
-- the cache sweep and the port of the pedalons projection.
+- the cache sweep and the port of the client's projection.
 
 The integration tests go through the axum router (`tests/api.rs`). They use 6 km of the np-655
 route, with its 3 real tiles:
 
 - the response contract;
-- agreement with the Stadia ranges (over 80 %);
+- agreement with the Valhalla ranges (over 80 %);
 - the `shape`, the Valhalla error codes, including 171 on two real sea tiles;
 - the 503 when the tile server is unreachable, or offline when the tile is missing;
 - gzip.
@@ -291,7 +265,7 @@ stretch, `CANDS=1` for the candidates), `… prefetch|stats <route.json>…`,
 
 - **Approximate unpaved surface**: `unpaved` does not say whether it is gravel, compacted, earth
   or grass. The GRAVEL / DIRT class is guessed (rules above): it is the main source of
-  disagreement with Stadia (59 % of the disagreements).
+  disagreement with Valhalla (59 % of the disagreements).
 - **Lost tags**: `mtb:scale` (which, in Valhalla, replaces even an asphalt surface), `sac_scale`
   (way → `path`), `smoothness`, `access`, `cycleway:*`, `foot`, `segregated`,
   `footway=sidewalk` are not in Shortbread. The PATH class only appears through
@@ -299,7 +273,7 @@ stretch, `CANDS=1` for the candidates), `… prefetch|stats <route.json>…`,
   (`cobblestone`) and the values Shortbread sets to null (`wood`…) take the default value of the
   way type.
 - **Missing ways**: `highway=bridleway` is not in the tiles. These stretches come out `unmatched`
-  (unknown for pedalons).
+  (unknown for the client).
 - **Freshness**: VersaTiles tiles are rebuilt from time to time (OSM from 2026-06-07 for those used
   here, date given by `/health`). More recent OSM edits are not in them.
 - **Rebuilt topology**: no node id; junctions are recovered from geometry (tolerance < 1 m). Two
@@ -309,5 +283,5 @@ stretch, `CANDS=1` for the candidates), `… prefetch|stats <route.json>…`,
 - **No `osm_changeset`**, nor `admins`, `confidence_score`, `names`, `way_id`, `speed`…
 - **Antimeridian**: a trace crossing it is rejected (444).
 - **A single tile provider**: if `tiles.versatiles.org` is unreachable and the tiles are not
-  cached, 503 (pedalons retries). To get around it, VersaTiles also publishes the full
+  cached, 503 (the client retries). To get around it, VersaTiles also publishes the full
   `.versatiles` file, which can be self-hosted and pointed to by `TILES_URL`.

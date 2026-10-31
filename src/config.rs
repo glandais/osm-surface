@@ -36,7 +36,7 @@ pub struct Config {
     /// `MAX_CONCURRENT_MATCHES`, default: the number of CPUs.
     pub max_concurrent_matches: usize,
     /// `TILES_DEADLINE_SECS`, default 11: loading the tiles of one request takes no longer,
-    /// or the request fails with a 503 (pedalons's read timeout is 15 s; it retries a 503).
+    /// or the request fails with a 503 (the client's read timeout is 15 s; it retries a 503).
     pub tiles_deadline: Duration,
 }
 

@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Rust (axum) drop-in replacement for the Valhalla / Stadia Maps `trace_attributes` endpoint, as
-consumed by Pédalons' `pedalons` backend (`StadiaTraceAttributesClient` / `TraceSurfaceComputer`).
+A Rust (axum) drop-in replacement for Valhalla's `trace_attributes` map-matching endpoint
+(<https://valhalla.github.io/valhalla/api/map-matching/>), as consumed by a client that projects
+the answer into surface ranges (`TraceSurfaceComputer`, ported in `src/client.rs`).
 Instead of a Valhalla graph, it reads VersaTiles **Shortbread 1.0** vector tiles (z14, `streets`
 layer), fetched on demand and cached. The response must stay byte-for-byte compatible with what
-pedalons expects from Stadia (fields, Valhalla error codes, 503 for transient failures).
+the client expects from Valhalla (fields, Valhalla error codes, 503 for transient failures).
 
 The README is the detailed spec (attribute derivation tables, error codes, env
 vars, known limits, eval results). Code and doc comments are in English. Keep the README in sync
@@ -25,7 +26,7 @@ cargo test <name_substring>                  # single test
 cargo clippy --all-targets
 
 cargo run --release                          # serves on 0.0.0.0:8002 (POST /trace_attributes/v1, GET /health)
-cargo run --release --bin eval               # agreement with Stadia on testdata/*.route.json → eval/report.md
+cargo run --release --bin eval               # agreement with Valhalla on testdata/*.route.json → eval/report.md
 EVAL_VERBOSE=1 cargo run --release --bin eval        # list every disagreement ≥ 40 m
 cargo run --release --bin eval -- --url http://localhost:8002
 cargo run --release --bin inspect -- near <lat> <lon> [radius]       # streets + attributes around a point
@@ -46,7 +47,7 @@ Request pipeline, orchestrated by `trace::Service` (`src/trace.rs`):
 2. **`trace.rs`** — request types (`encoded_polyline` via `polyline.rs` or `shape`), validation,
    concurrency limit on matches, then `describe()` turns the match into `edges` / `matched_points`
    / `shape`. Edges must cover the whole shape without gaps (even over jumps) and the shape must be
-   monotone along the trace, because pedalons re-projects it (`TraceSurfaceProjection`).
+   monotone along the trace, because the client re-projects it (`TraceSurfaceProjection`).
 3. **`tiles.rs`** — tile corridor around the trace, bounded concurrent fetch with retry, disk
    cache keyed by source (`<host_path>-<hash of TILES_URL>/z/x/y.mvt`), stale-on-error, in-memory
    moka LRU of decoded layers, cache sweep. Any failure to get a real tile is a 503, never an empty
@@ -63,7 +64,7 @@ Request pipeline, orchestrated by `trace::Service` (`src/trace.rs`):
    emission, network-vs-straight-distance transitions via bounded Dijkstra, fixed-cost straight
    jump when the network is disconnected, footway penalty for bicycle).
 
-Supporting modules: `geo.rs` (geodesy/projection), `pedalons.rs` (port of pedalons's projection into
+Supporting modules: `geo.rs` (geodesy/projection), `client.rs` (port of the client's projection into
 surface ranges — `SurfaceRanges`, `TrackSurface` — used by the integration tests and `eval` to
 score the output the way the real client would).
 
@@ -72,6 +73,6 @@ score the output the way the real client would).
 - `tests/fixtures/tiles/…` — real z14 tiles (np655 stretch + two sea tiles for error 171), used
   with `offline: true` so tests never touch the network. New fixtures are produced with
   `inspect fixture`.
-- `testdata/*.route.json` — Pédalons routes with the reference surface ranges pedalons computed from
-  real Stadia answers; input of `eval`. Stadia is the reference, not ground truth.
+- `testdata/*.route.json` — routes with the reference surface ranges the client computed from real
+  Valhalla answers; input of `eval`. Valhalla is the reference, not ground truth.
 - `tests/tiles.rs` spins up a local tile server to test cache/error behaviour.

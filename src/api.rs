@@ -1,5 +1,5 @@
-//! HTTP layer: `POST /trace_attributes/v1` (Stadia Maps path), `POST /trace_attributes`
-//! (Valhalla path), `GET /health`.
+//! HTTP layer: `POST /trace_attributes` (Valhalla path), `POST /trace_attributes/v1`
+//! (alias), `GET /health`.
 
 use crate::trace::{ApiError, Service, TraceRequest};
 use axum::body::Bytes;
@@ -40,7 +40,7 @@ async fn health(State(service): State<Arc<Service>>) -> impl IntoResponse {
     }))
 }
 
-/// The `Authorization: Stadia-Auth <key>` header (or an `api_key` parameter) is accepted
+/// An `Authorization` header (or an `api_key` parameter) is accepted
 /// and ignored. The body is parsed by hand so that a malformed one gets a Valhalla error.
 async fn trace_attributes(
     State(service): State<Arc<Service>>,

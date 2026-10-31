@@ -1,16 +1,16 @@
-//! Evaluation against Stadia Maps: for each Pédalons route file (`*.route.json`), the exact
-//! request pedalons would send, our answer, pedalons's projection of it into surface ranges, and
-//! the comparison with the ranges pedalons computed from the real Stadia answers.
+//! Evaluation against Valhalla: for each route file (`*.route.json`), the exact request the
+//! client would send, our answer, the client's projection of it into surface ranges, and the
+//! comparison with the ranges the client computed from real Valhalla answers.
 //!
 //! ```text
 //! eval [--data testdata] [--url http://localhost:8002] [--out eval/report.md] [--costing bicycle]
 //! ```
 //! Without `--url` the service runs in-process (same configuration from the environment).
 
+use osm_surface::client::{self, CallResult, Range, TrackSurface};
 use osm_surface::config::Config;
 use osm_surface::mvt::StreetAttrs;
 use osm_surface::trace::{Service, TraceOutput, TraceResponse};
-use osm_surface::pedalons::{self, CallResult, Range, TrackSurface};
 use osm_surface::valhalla;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -83,7 +83,7 @@ impl Backend {
         let started = Instant::now();
         match self {
             Backend::InProcess(service) => {
-                let req = pedalons::request(encoded, costing);
+                let req = client::request(encoded, costing);
                 match service.trace_attributes(&req).await {
                     Ok(TraceOutput {
                         response,
@@ -98,21 +98,21 @@ impl Backend {
                         };
                         (CallResult::Ok(Box::new(response)), Some(answer))
                     }
-                    Err(e) if e.status == 400 && pedalons::DEFINITIVE_CODES.contains(&e.code) => {
+                    Err(e) if e.status == 400 && client::DEFINITIVE_CODES.contains(&e.code) => {
                         (CallResult::Definitive(e.code), None)
                     }
                     Err(e) => (CallResult::Transient(e.to_string()), None),
                 }
             }
             Backend::Http(client, base) => {
-                let mut body = pedalons::request_json(encoded, costing);
+                let mut body = client::request_json(encoded, costing);
                 body["debug"] = serde_json::Value::Bool(true);
                 let resp = client
                     .post(format!(
-                        "{}/trace_attributes/v1",
+                        "{}/trace_attributes",
                         base.trim_end_matches('/')
                     ))
-                    .header("Authorization", "Stadia-Auth eval")
+                    .header("Authorization", "eval")
                     .json(&body)
                     .send()
                     .await;
@@ -142,7 +142,7 @@ impl Backend {
                         .ok()
                         .and_then(|v| v["error_code"].as_i64())
                         .unwrap_or(-1) as i32;
-                    if status == 400 && pedalons::DEFINITIVE_CODES.contains(&code) {
+                    if status == 400 && client::DEFINITIVE_CODES.contains(&code) {
                         (CallResult::Definitive(code), None)
                     } else {
                         (
@@ -181,12 +181,12 @@ struct RouteReport {
     /// confusion[(ref, ours)]
     confusion: BTreeMap<(TrackSurface, TrackSurface), f64>,
     agree: f64,
-    /// The agreement on the metres where Stadia knows the surface.
+    /// The agreement on the metres where Valhalla knows the surface.
     agree_known: f64,
     paved_agree: f64,
     unmatched_points: usize,
     worst: Vec<(f64, f64, TrackSurface, TrackSurface, String)>,
-    /// Our unknown stretches: from, to, what Stadia says there, midpoint.
+    /// Our unknown stretches: from, to, what Valhalla says there, midpoint.
     unknown: Vec<(f64, f64, String, String)>,
 }
 
@@ -272,7 +272,7 @@ async fn evaluate(
     let handle = tokio::runtime::Handle::current();
     let started = Instant::now();
     let (cover, slices) =
-        pedalons::compute(&route.lat, &route.lon, &route.dist, costing, |enc, c| {
+        client::compute(&route.lat, &route.lon, &route.dist, costing, |enc, c| {
             let (result, answer) =
                 tokio::task::block_in_place(|| handle.block_on(backend.call(enc, c)));
             answers.push(answer);
@@ -299,7 +299,7 @@ async fn evaluate(
         let d: Vec<f64> = (s.i0..=s.i1)
             .map(|i| route.dist[i] - route.dist[s.i0])
             .collect();
-        for r in pedalons::project(&d, resp, |e, _| Some(e)) {
+        for r in client::project(&d, resp, |e, _| Some(e)) {
             let (a, b) = (
                 s.start.max(r.from + route.dist[s.i0]),
                 s.end.min(r.to + route.dist[s.i0]),
@@ -464,16 +464,16 @@ the exact OSM tags:
   (`compacted`, `gravel`, `fine_gravel` → GRAVEL; `ground`, `dirt`, `earth` → DIRT; `grass` →
   PATH); for an `unpaved`, the class is guessed (see README) and no rule based on the tile
   attributes alone goes beyond 87.6 / 93.3 / 93.5 %.
-- **14 %: age of the tiles** (OSM from 2026-06-07, Stadia on an OSM from around late September
+- **14 %: age of the tiles** (OSM from 2026-06-07, Valhalla on an OSM from around late September
   2026): `path`s turned into `track`s (DIRT by default in Valhalla) and the reverse, surfaces
   added since.
 - **6 %: `mtb:scale`** (Valhalla: 0 → dirt, 1 → gravel, ≥ 2 → path, even on asphalt;
-  graymond 18370-19320: a `surface=asphalt` + `mtb:scale=0` road that Stadia gives as DIRT),
+  graymond 18370-19320: a `surface=asphalt` + `mtb:scale=0` road that Valhalla gives as DIRT),
   missing from the tiles like `sac_scale` and `smoothness`.
 - **3 %: `highway=bridleway`**, missing from the tiles (graymond 13850-14540: 690 m of
-  `surface=compacted` bridleway that Stadia sees as GRAVEL, unknown for us).
-- **≈ 12 %: the reference** (Stadia UNKNOWN where OSM has a surface, or routed elsewhere since an
-  OSM change; the \"excluding Stadia unknown\" figure removes the former), the rest: the matching
+  `surface=compacted` bridleway that Valhalla sees as GRAVEL, unknown for us).
+- **≈ 12 %: the reference** (Valhalla UNKNOWN where OSM has a surface, or routed elsewhere since an
+  OSM change; the \"excluding Valhalla unknown\" figure removes the former), the rest: the matching
   (parallel ways: sidewalk versus roadway, service alley versus track).
 ";
 
@@ -482,7 +482,7 @@ fn pct(a: f64, total: f64) -> String {
 }
 
 fn summary_table(s: &mut String, reports: &[RouteReport]) {
-    writeln!(s, "| Route | Length | Points | Agreement (class) | Agreement excluding Stadia unknown | Paved/unpaved agreement | Unknown (ours) | Unmatched points | Latency |").ok();
+    writeln!(s, "| Route | Length | Points | Agreement (class) | Agreement excluding Valhalla unknown | Paved/unpaved agreement | Unknown (ours) | Unmatched points | Latency |").ok();
     writeln!(s, "|---|---:|---:|---:|---:|---:|---:|---:|---:|").ok();
     for r in reports {
         let unknown = r.ours.get(&TrackSurface::Unknown).copied().unwrap_or(0.0);
@@ -510,11 +510,11 @@ fn report_markdown(
     sources: &str,
 ) -> String {
     let mut s = String::new();
-    writeln!(s, "# osm-surface vs Stadia Maps evaluation\n").ok();
+    writeln!(s, "# osm-surface vs Valhalla evaluation\n").ok();
     writeln!(
         s,
-        "Generated by `cargo run --release --bin eval` ({mode}). Reference: surface ranges computed by pedalons \
-         from the real Stadia (Valhalla) answers; our ranges go through the same port of \
+        "Generated by `cargo run --release --bin eval` ({mode}). Reference: surface ranges computed by the client \
+         from real Valhalla answers; our ranges go through the same port of \
          `TraceSurfaceProjection` + `SurfaceRanges` (MIN_SPAN_M = 20) + `TrackSurface`.\n"
     )
     .ok();
@@ -543,7 +543,7 @@ fn report_markdown(
         .ok();
         writeln!(
             s,
-            "| Class | Ours (m) | Ours (%) | Stadia (m) | Stadia (%) |"
+            "| Class | Ours (m) | Ours (%) | Valhalla (m) | Valhalla (%) |"
         )
         .ok();
         writeln!(s, "|---|---:|---:|---:|---:|").ok();
@@ -567,10 +567,10 @@ fn report_markdown(
         }
         writeln!(
             s,
-            "\nConfusion matrix (metres; rows: Stadia, columns: ours)\n"
+            "\nConfusion matrix (metres; rows: Valhalla, columns: ours)\n"
         )
         .ok();
-        write!(s, "| Stadia \\ ours |").ok();
+        write!(s, "| Valhalla \\ ours |").ok();
         for c in TrackSurface::ALL {
             write!(s, " {} |", c.name()).ok();
         }
@@ -589,7 +589,7 @@ fn report_markdown(
             writeln!(s).ok();
         }
         writeln!(s, "\nThe 10 largest disagreements\n").ok();
-        writeln!(s, "| From (m) | To (m) | Length | Ours | Stadia | Midpoint (lat, lon) \\| matched street (tags → Valhalla surface) |").ok();
+        writeln!(s, "| From (m) | To (m) | Length | Ours | Valhalla | Midpoint (lat, lon) \\| matched street (tags → Valhalla surface) |").ok();
         writeln!(s, "|---:|---:|---:|---|---|---|").ok();
         for (from, to, us, rf, info) in &r.worst {
             writeln!(
@@ -608,7 +608,7 @@ fn report_markdown(
     writeln!(s, "\n## Our unknown ranges (≥ 30 m)\n").ok();
     writeln!(
         s,
-        "| Route | From (m) | To (m) | Length | Stadia sees | Midpoint (lat, lon) |"
+        "| Route | From (m) | To (m) | Length | Valhalla sees | Midpoint (lat, lon) |"
     )
     .ok();
     writeln!(s, "|---|---:|---:|---:|---|---|").ok();
@@ -629,7 +629,7 @@ fn report_markdown(
     }
     writeln!(
         s,
-        "\n## Calibration: what Stadia says depending on the matched street's attributes\n"
+        "\n## Calibration: what Valhalla says depending on the matched street's attributes\n"
     )
     .ok();
     writeln!(s, "All routes combined, sampled every 5 m. `kind | surface | tracktype | bicycle`.\n").ok();

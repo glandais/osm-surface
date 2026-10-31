@@ -1,4 +1,4 @@
-//! Developer tool: prefetch the tiles of Pédalons route files into the disk cache, print
+//! Developer tool: prefetch the tiles of route files into the disk cache, print
 //! statistics of the `streets` layer, or dump the streets near a point.
 //!
 //! ```text

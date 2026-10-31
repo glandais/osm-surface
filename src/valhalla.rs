@@ -415,7 +415,7 @@ pub fn surface_of(a: &StreetAttrs, road_class: RoadClass, use_: Use) -> Surface 
 /// What an `unpaved` street most likely is in Valhalla's terms, the exact OSM value being
 /// lost. Valhalla's own reading of a literal `surface=unpaved` is `gravel`, which stands for
 /// the unpaved values by default. Two exceptions, from how `surface` is used on OSM (taginfo)
-/// and checked against Stadia on the eval routes:
+/// and checked against Valhalla on the eval routes:
 /// - a `path` or `bridleway` without a (hard) tracktype is mostly `ground` / `dirt`: `dirt`;
 /// - a soft tracktype (grade4, grade5: earth, grass) is `dirt`, whatever the kind;
 ///
