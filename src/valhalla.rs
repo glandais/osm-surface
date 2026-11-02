@@ -2,10 +2,10 @@
 //! `src/mjolnir/pbfgraphparser.cc`, `valhalla/mjolnir/adminconstants.h`), applied to what the
 //! Shortbread `streets` layer keeps of the tags.
 //!
-//! Shortbread reduces the `surface` tag to `paved` / `unpaved` (and drops `smoothness`,
-//! `mtb:scale`, `sac_scale`, `cycleway:*`, `foot`, `access`, `segregated`), so where Valhalla
-//! would read the exact OSM value, a fixed choice stands for the whole class; see
-//! [`surface_of`] and the README for the table.
+//! The VersaTiles `streets` layer keeps the raw OSM `surface` value, read as Valhalla does. It
+//! drops `smoothness`, `mtb:scale`, `sac_scale`, `cycleway:*`, `access`, `segregated`. Older
+//! VersaTiles builds reduced `surface` to `paved` / `unpaved`; for those tiles a fixed choice
+//! stands for the whole class, see [`surface_of`] and the README.
 
 use crate::config::AccessRules;
 use crate::mvt::StreetAttrs;
@@ -302,6 +302,26 @@ fn bicycle_tag(value: Option<&str>) -> Option<bool> {
     }
 }
 
+/// The bicycle access a street's tags give, before the defaults by kind.
+///
+/// Shortbread 1.0 keeps the raw `bicycle` value, read with Valhalla's table. Shortbread 1.1
+/// normalizes the first recognized value of `bicycle`, `vehicle`, `access`:
+/// - `yes` (yes, designated, permissive): allowed, as in Valhalla;
+/// - `limited` (destination, customers, permit, delivery, and the rarer agricultural,
+///   forestry, discouraged): allowed, as Valhalla does for the common ones;
+/// - `no` (no, but also private and dismount, which Valhalla allows): it cannot be told apart,
+///   so it says nothing and the default of the kind applies. Measured on the eval routes, this
+///   is closer to Valhalla than a ban (fewer stretches left unmatched on `access=private` paths).
+fn bicycle_access(a: &StreetAttrs) -> Option<bool> {
+    if !a.access_normalized {
+        return bicycle_tag(a.bicycle.as_deref());
+    }
+    match a.bicycle.as_deref()? {
+        "yes" | "limited" => Some(true),
+        _ => None,
+    }
+}
+
 /// The edge attributes of a street, Valhalla style.
 pub fn derive(a: &StreetAttrs, rules: AccessRules) -> EdgeInfo {
     let kind = a.kind.as_str();
@@ -325,7 +345,7 @@ pub fn derive(a: &StreetAttrs, rules: AccessRules) -> EdgeInfo {
         "busway" => (false, false, false),
         _ => (false, false, false),
     };
-    if let Some(b) = bicycle_tag(a.bicycle.as_deref()) {
+    if let Some(b) = bicycle_access(a) {
         bike = b;
     }
     if kind == "busway" {
@@ -363,7 +383,7 @@ pub fn derive(a: &StreetAttrs, rules: AccessRules) -> EdgeInfo {
     // defaults) and a footway or path "shared". Elsewhere it comes from `cycleway:*`, which
     // Shortbread drops.
     let lua_bike = match kind {
-        "footway" | "sidewalk" | "crossing" => bicycle_tag(a.bicycle.as_deref()).unwrap_or(false),
+        "footway" | "sidewalk" | "crossing" => bicycle_access(a).unwrap_or(false),
         _ => bike,
     };
     let cycle_lane = match use_ {
@@ -386,17 +406,17 @@ pub fn derive(a: &StreetAttrs, rules: AccessRules) -> EdgeInfo {
 /// The surface of a street.
 ///
 /// Valhalla: the `surface` tag wins, then `tracktype`, then a default by road class and use.
-/// Shortbread only says `paved` or `unpaved` for the tag, so:
+/// The raw OSM value goes through [`surface_from_osm`]. On a tile of the older, reduced schema
+/// ([`StreetAttrs::surface_reduced`]: only `paved` / `unpaved`):
 /// - `paved` is `paved_smooth` (asphalt, concrete: by far the most common paved values;
 ///   sett and paving stones would be `paved`, the same PAVED class, and cobblestone
-///   `paved_rough`, which cannot be told apart);
+///   `paved_rough`, which cannot be told apart), as Valhalla reads a literal `paved`;
 /// - `unpaved` cannot be resolved into compacted / gravel / dirt / grass. The `tracktype`
 ///   (which Valhalla ignores when there is a surface tag) is the best hint left of what it
 ///   is; without it, the kind decides (see [`unpaved_guess`]).
 pub fn surface_of(a: &StreetAttrs, road_class: RoadClass, use_: Use) -> Surface {
     match a.surface.as_deref() {
-        Some("paved") => return Surface::PavedSmooth,
-        Some("unpaved") => return unpaved_guess(a),
+        Some("unpaved") if a.surface_reduced => return unpaved_guess(a),
         Some(other) => {
             if let Some(s) = surface_from_osm(other) {
                 return s;
@@ -412,8 +432,8 @@ pub fn surface_of(a: &StreetAttrs, road_class: RoadClass, use_: Use) -> Surface 
     default_surface(road_class, use_)
 }
 
-/// What an `unpaved` street most likely is in Valhalla's terms, the exact OSM value being
-/// lost. Valhalla's own reading of a literal `surface=unpaved` is `gravel`, which stands for
+/// What an `unpaved` street of a reduced-schema tile most likely is in Valhalla's terms, the
+/// exact OSM value being lost. Valhalla's own reading of a literal `surface=unpaved` is `gravel`, which stands for
 /// the unpaved values by default. Two exceptions, from how `surface` is used on OSM (taginfo)
 /// and checked against Valhalla on the eval routes:
 /// - a `path` or `bridleway` without a (hard) tracktype is mostly `ground` / `dirt`: `dirt`;
@@ -505,21 +525,6 @@ mod tests {
             Surface::Path
         );
         assert_eq!(
-            derive(&street("track", Some("unpaved"), Some("grade5")), r).surface,
-            Surface::Dirt
-        );
-        assert_eq!(
-            derive(&street("track", Some("unpaved"), None), r).surface,
-            Surface::Gravel
-        );
-        assert_eq!(
-            derive(&street("path", Some("unpaved"), None), r).surface,
-            Surface::Dirt
-        );
-        let mut green = street("path", Some("unpaved"), None);
-        green.bicycle = Some("designated".into());
-        assert_eq!(derive(&green, r).surface, Surface::Compacted);
-        assert_eq!(
             derive(&street("track", None, None), r).surface,
             Surface::Dirt
         );
@@ -546,6 +551,70 @@ mod tests {
         // the surface tag wins over the tracktype
         assert_eq!(
             derive(&street("track", Some("paved"), Some("grade3")), r).surface,
+            Surface::PavedSmooth
+        );
+    }
+
+    #[test]
+    fn raw_surface_values() {
+        let r = AccessRules::France;
+        let s = |kind, surface, tt| derive(&street(kind, Some(surface), tt), r).surface;
+        assert_eq!(s("track", "compacted", Some("grade3")), Surface::Compacted);
+        assert_eq!(s("path", "ground", None), Surface::Dirt);
+        assert_eq!(s("track", "grass", Some("grade1")), Surface::Path);
+        assert_eq!(s("residential", "sett", None), Surface::Paved);
+        // a literal `unpaved` is Valhalla's gravel, whatever the kind or tracktype
+        assert_eq!(s("path", "unpaved", None), Surface::Gravel);
+        assert_eq!(s("track", "unpaved", Some("grade5")), Surface::Gravel);
+        // an unknown value skips the tracktype
+        assert_eq!(s("track", "whatever", Some("grade1")), Surface::Dirt);
+    }
+
+    #[test]
+    fn normalized_bicycle_access() {
+        let r = AccessRules::France;
+        let v11 = |kind, bicycle: &str| {
+            let mut a = street(kind, None, None);
+            a.bicycle = Some(bicycle.into());
+            a.access_normalized = true;
+            derive(&a, r).bike
+        };
+        assert!(v11("pedestrian", "yes"));
+        assert!(v11("pedestrian", "limited"));
+        // `no` may be private or dismount: the default of the kind
+        assert!(v11("path", "no"));
+        assert!(!v11("pedestrian", "no"));
+        // Shortbread 1.0: the raw value, an explicit no
+        let mut raw = street("path", None, None);
+        raw.bicycle = Some("no".into());
+        assert!(!derive(&raw, r).bike);
+    }
+
+    #[test]
+    fn reduced_schema_unpaved_guess() {
+        let r = AccessRules::France;
+        let reduced = |kind, surface, tt| {
+            let mut a = street(kind, Some(surface), tt);
+            a.surface_reduced = true;
+            a
+        };
+        assert_eq!(
+            derive(&reduced("track", "unpaved", Some("grade5")), r).surface,
+            Surface::Dirt
+        );
+        assert_eq!(
+            derive(&reduced("track", "unpaved", None), r).surface,
+            Surface::Gravel
+        );
+        assert_eq!(
+            derive(&reduced("path", "unpaved", None), r).surface,
+            Surface::Dirt
+        );
+        let mut green = reduced("path", "unpaved", None);
+        green.bicycle = Some("designated".into());
+        assert_eq!(derive(&green, r).surface, Surface::Compacted);
+        assert_eq!(
+            derive(&reduced("track", "paved", Some("grade3")), r).surface,
             Surface::PavedSmooth
         );
     }

@@ -6,14 +6,14 @@ A Rust microservice that replaces, identically from its client's point of view, 
 traces. Its client cuts a trace into slices, sends each one and projects the answer back onto the
 trace as surface ranges; `src/client.rs` ports that logic for the tests and the evaluation.
 
-The data comes from **VersaTiles Shortbread 1.0** vector tiles (OpenStreetMap,
+The data comes from **VersaTiles Shortbread** vector tiles (schema 1.1, 1.0 still read; OpenStreetMap,
 `https://tiles.versatiles.org/tiles/osm/{z}/{x}/{y}`, zoom 14), downloaded on demand and cached.
 No Valhalla graph to build, no OSM extract to download or keep up to date.
 
-The tiles are the only source. Shortbread reduces `surface` to `paved` / `unpaved`, has neither
-`smoothness`, `mtb:scale`, `sac_scale`, `access` nor `bridleway`s, and its data is a few months
-old. On the evaluation routes, agreement with Valhalla is **86 to 94 %** per surface class and
-**98 to 99 %** on paved / unpaved (see *Evaluation*).
+The tiles are the only source. They keep the raw OSM `surface` value but have neither
+`smoothness`, `mtb:scale`, `sac_scale` nor `bridleway`s, access is reduced to `yes` / `limited` /
+`no`, and the data is a few weeks old. On the evaluation routes, agreement with Valhalla is
+**98 to 99 %** per surface class and on paved / unpaved (see *Evaluation*).
 
 ## What the service does
 
@@ -92,17 +92,18 @@ found, `sac_scale` gives `path`, otherwise a default value depending on the road
 
 ### From Shortbread to Valhalla
 
-Shortbread only keeps `paved` / `unpaved` from the `surface` tag and keeps neither `smoothness`,
-`mtb:scale` nor `sac_scale`. Hence:
+The `streets` layer keeps the raw value of the OSM `surface` tag (VersaTiles since
+planetiler-shortbread
+[218534d](https://github.com/versatiles-org/planetiler-shortbread/commit/218534d4478abcf29c9ec8c5a3ba2521417eace8),
+2026-08-23), read with Valhalla's own table (`asphalt`, `concrete` → `paved_smooth`; `sett`,
+`paving_stones` → `paved`; `cobblestone` → `paved_rough`; `compacted`, `wood` → `compacted`;
+`ground`, `dirt`, `earth` → `dirt`; `gravel`, `fine_gravel`, `sand`, a literal `unpaved` →
+`gravel`; `grass`, `rock` → `path`; an unknown value → the default). It keeps neither
+`smoothness`, `mtb:scale` nor `sac_scale`. Hence:
 
 | Shortbread `streets` | Valhalla surface returned | Surface class |
 |---|---|---|
-| `surface=paved` | `paved_smooth` | PAVED |
-| `surface=unpaved`, `bicycle=designated` (greenway), tracktype missing or grade1-3 | `compacted` | GRAVEL |
-| `surface=unpaved`, tracktype grade4 / grade5 | `dirt` | DIRT |
-| `surface=unpaved`, tracktype grade1-3 | `gravel` | GRAVEL |
-| `surface=unpaved`, `kind=path` (no tracktype) | `dirt` | DIRT |
-| `surface=unpaved`, others (track, footway, service…) | `gravel` (Valhalla's reading of `unpaved`) | GRAVEL |
+| `surface=<OSM value>` | Valhalla's reading of the value | per value |
 | no surface, `tracktype=grade1` | `paved_rough` | PAVED_ROUGH |
 | no surface, `grade2` / `grade3` / `grade4` / `grade5` | `compacted` / `dirt` / `gravel` / `path` | GRAVEL / DIRT / GRAVEL / PATH |
 | no surface nor tracktype: motorway … residential | `paved_smooth` | PAVED |
@@ -111,10 +112,22 @@ Shortbread only keeps `paved` / `unpaved` from the `surface` tag and keeps neith
 | same: path, footway, pedestrian, bridleway | `compacted` | GRAVEL |
 | same: cycleway, steps | `paved` | PAVED |
 
-The rules for `unpaved` are the only choices specific to this service: the exact value being lost,
-the most likely one is taken (OSM usage of `surface` per way type, checked on the evaluation
-routes). The calibration table of `eval/report.md` shows, for each combination of Shortbread
-attributes, what Valhalla sees there.
+Older VersaTiles builds (and `.versatiles` files made before that commit) reduced `surface` to
+`paved` / `unpaved`. Such a tile is recognised (all its `surface` values are `paved` /
+`unpaved`) and read with the service's own choices, the exact value being lost (OSM usage of
+`surface` per way type, checked on the evaluation routes when the tiles were reduced):
+
+| Reduced tile | Valhalla surface returned | Surface class |
+|---|---|---|
+| `surface=paved` | `paved_smooth` | PAVED |
+| `surface=unpaved`, `bicycle=designated` (greenway), tracktype missing or grade1-3 | `compacted` | GRAVEL |
+| `surface=unpaved`, tracktype grade4 / grade5 | `dirt` | DIRT |
+| `surface=unpaved`, tracktype grade1-3 | `gravel` | GRAVEL |
+| `surface=unpaved`, `kind=path` (no tracktype) | `dirt` | DIRT |
+| `surface=unpaved`, others (track, footway, service…) | `gravel` (Valhalla's reading of `unpaved`) | GRAVEL |
+
+The calibration table of `eval/report.md` shows, for each combination of Shortbread attributes,
+what Valhalla sees there.
 
 **`use`**: `road`, `ramp` (links), `track`, `driveway`, `alley`, `parking_aisle`,
 `emergency_access`, `drive_through`, `living_street`, `service_road`, `cycleway`, `footway`,
@@ -125,10 +138,17 @@ attributes, what Valhalla sees there.
 ### Access (`costing` filter)
 
 Valhalla's default values (`lua/graph.lua`), with the French rules of `adminconstants.h` by default
-(`ACCESS_RULES=fr`): bicycles allowed on footways, pedestrians on cycleways, neither on trunks; the
-`bicycle` tag wins (`no`, `designated`…). `access`, `vehicle`, `foot`, `smoothness` and
-`mtb:scale` are not in the tiles and therefore do not count. `ACCESS_RULES=default` gives the
-worldwide rules. Railways, tramways and airport runways are never part of the network.
+(`ACCESS_RULES=fr`): bicycles allowed on footways, pedestrians on cycleways, neither on trunks;
+then the tile's `bicycle` attribute. Shortbread 1.1 (the VersaTiles tiles since planetiler-shortbread
+87706ef, 2026-08-23) normalizes it to the first recognized value of `bicycle`, `vehicle`,
+`access`: `yes` (yes, designated, permissive) and `limited` (destination, customers, permit,
+delivery, agricultural, forestry, discouraged) allow bicycles; `no` covers `no` but also
+`private` and `dismount`, which Valhalla allows, so it is ignored and the default of the way
+type applies (closer to Valhalla on the evaluation routes than a ban: fewer `access=private`
+paths left unmatched, at the cost of matching the few explicit `bicycle=no` ways). On a
+Shortbread 1.0 tile (recognized by the absence of `foot` / `motorcar`), the raw `bicycle` value
+is read with Valhalla's table (`no`, `designated`…) and `access` is unknown. `ACCESS_RULES=default`
+gives the worldwide rules. Railways, tramways and airport runways are never part of the network.
 
 ## Running
 
@@ -205,21 +225,20 @@ disagreements with the matched street, our unknown ranges, calibration table).
 
 | Route | Length | Agreement (class) | Excluding Valhalla unknown | Paved / unpaved | Latency |
 |---|---:|---:|---:|---:|---:|
-| graymond-ride-138 | 90.2 km | **86.0 %** | 86.5 % | 98.1 % | ≈ 100 ms |
-| np-655-gravel | 52.2 km | **91.6 %** | 91.5 % | 99.0 % | ≈ 75 ms |
-| np677-chill-gravel | 42.8 km | **93.5 %** | 93.9 % | 99.3 % | ≈ 60 ms |
+| graymond-ride-138 | 90.2 km | **96.3 %** | 96.9 % | 98.3 % | ≈ 100 ms |
+| np-655-gravel | 52.2 km | **98.1 %** | 99.1 % | 99.2 % | ≈ 100 ms |
+| np677-chill-gravel | 42.8 km | **99.0 %** | 99.3 % | 99.4 % | ≈ 75 ms |
 
-OSM tiles from 2026-06-07. Before the review: 85.6 / 91.6 / 93.4 %.
+OSM tiles from 2026-10-19. With the earlier tiles (OSM 2026-06-07, `surface` reduced to `paved` /
+`unpaved`): 86.0 / 91.6 / 93.5 %.
 
-The reference is Valhalla (on an OSM from around late September 2026), not ground truth.
-For paved versus unpaved, the tiles are enough. The remaining disagreements are mostly about the
-class of an unpaved way (GRAVEL, DIRT or PATH), and come from what the tiles do not say:
+The reference is Valhalla (on an OSM from around late September 2026), not ground truth. The
+stretches of 40 m or more still in disagreement (≈ 4.3 km over the three routes) come from:
 
-- the surface reduced to `paved` / `unpaved` by Shortbread (≈ 60 % of the disagreements);
-- the age of the tiles (≈ 14 %);
-- `mtb:scale`, `smoothness`, `sac_scale` and `bridleway`s, missing from the tiles (≈ 10 %);
-- the rest: the reference itself (Valhalla without a surface, or routed elsewhere since an OSM
-  change) and the matching (parallel ways).
+- Valhalla without a surface where we give one (≈ 27 %), including an explicit `bicycle=no`
+  path that Shortbread 1.1 no longer tells apart from `private` (see *Access*);
+- `mtb:scale` (≈ 22 %) and `bridleway`s (≈ 16 %), missing from the tiles;
+- the rest: the matching (parallel ways), defaults of ways without a surface, OSM edits.
 
 The details are in the report and in *Known limits*.
 
@@ -236,7 +255,8 @@ cargo clippy --all-targets
 Everything runs offline. The unit tests cover:
 
 - polyline6, including rejection of forged deltas;
-- geodesy and MVT decoding on a real tile;
+- geodesy and MVT decoding on a real tile, and detection of the older schemas (reduced
+  `surface`, Shortbread 1.0 access) on a tile of an older build;
 - the graph: splitting at tile borders and stitching;
 - the Valhalla derivation from Shortbread attributes (surface, `use`, `cycle_lane`, access);
 - matching on a synthetic network, jump coverage by edges and the 444 when only densified points
@@ -263,18 +283,18 @@ stretch, `CANDS=1` for the candidates), `… prefetch|stats <route.json>…`,
 
 ## Known limits
 
-- **Approximate unpaved surface**: `unpaved` does not say whether it is gravel, compacted, earth
-  or grass. The GRAVEL / DIRT class is guessed (rules above): it is the main source of
-  disagreement with Valhalla (59 % of the disagreements).
 - **Lost tags**: `mtb:scale` (which, in Valhalla, replaces even an asphalt surface), `sac_scale`
-  (way → `path`), `smoothness`, `access`, `cycleway:*`, `foot`, `segregated`,
-  `footway=sidewalk` are not in Shortbread. The PATH class only appears through
-  `tracktype=grade5`. PAVED_ROUGH only appears through `tracktype=grade1` without a surface: cobbles
-  (`cobblestone`) and the values Shortbread sets to null (`wood`…) take the default value of the
-  way type.
+  (way → `path`), `smoothness`, `cycleway:*`, `segregated`, `footway=sidewalk` are not in
+  Shortbread.
+- **Coarse access**: Shortbread 1.1 folds `private` and `dismount` into `no`, so `no` is ignored
+  for bicycles (see *Access*): an explicit `bicycle=no` way can be matched where Valhalla would
+  refuse it.
+- **Older tiles**: on a tile with `surface` reduced to `paved` / `unpaved` (older builds, stale
+  cache), the GRAVEL / DIRT class of an unpaved way is guessed (rules above), which cost about
+  6 to 10 points of agreement.
 - **Missing ways**: `highway=bridleway` is not in the tiles. These stretches come out `unmatched`
   (unknown for the client).
-- **Freshness**: VersaTiles tiles are rebuilt from time to time (OSM from 2026-06-07 for those used
+- **Freshness**: VersaTiles tiles are rebuilt from time to time (OSM from 2026-10-19 for those used
   here, date given by `/health`). More recent OSM edits are not in them.
 - **Rebuilt topology**: no node id; junctions are recovered from geometry (tolerance < 1 m). Two
   ways crossing without a common vertex in the tile are not connected (a fixed-cost jump makes up

@@ -451,30 +451,28 @@ async fn evaluate(
     Ok(rep)
 }
 
-/// What the disagreements left come from, as found by inspecting them (OSM tags checked on
-/// openstreetmap.org and in a Geofabrik extract; measured on 2026-10-27).
+/// What the disagreements left come from (stretches of 40 m or more, `EVAL_VERBOSE=1`; OSM tags
+/// checked on openstreetmap.org; measured on 2026-11-02 with the tiles of OSM 2026-10-19).
 const RESIDUAL_GAPS: &str = "
 ### Where the disagreements come from
 
-The tiles alone give 86 to 94 % agreement per class, 98 to 99 % on paved / unpaved.
-The remaining gap (about 20 km over the three routes) was inspected stretch by stretch against
-the exact OSM tags:
+Since VersaTiles keeps the raw `surface` value (planetiler-shortbread 218534d, 2026-08-23), the
+tiles give 96 to 99 % agreement per class, 98 to 99 % on paved / unpaved (86 to 94 % when the
+surface was reduced to `paved` / `unpaved`). The stretches of 40 m or more left (about 4.3 km over
+the three routes):
 
-- **59 %: surface reduced** to `paved` / `unpaved` by Shortbread. Valhalla reads the exact value
-  (`compacted`, `gravel`, `fine_gravel` → GRAVEL; `ground`, `dirt`, `earth` → DIRT; `grass` →
-  PATH); for an `unpaved`, the class is guessed (see README) and no rule based on the tile
-  attributes alone goes beyond 87.6 / 93.3 / 93.5 %.
-- **14 %: age of the tiles** (OSM from 2026-06-07, Valhalla on an OSM from around late September
-  2026): `path`s turned into `track`s (DIRT by default in Valhalla) and the reverse, surfaces
-  added since.
-- **6 %: `mtb:scale`** (Valhalla: 0 → dirt, 1 → gravel, ≥ 2 → path, even on asphalt;
+- **27 %: Valhalla UNKNOWN** where we give a surface (the \"excluding Valhalla unknown\" figure
+  removes these). np-655 44180-44690 is a `surface=compacted` path with an explicit `bicycle=no`,
+  which Valhalla refuses: Shortbread 1.1 folds `no`, `private` and `dismount` into `no`, which is
+  therefore not read as a ban (see README).
+- **22 %: `mtb:scale`** (Valhalla: 0 → dirt, 1 → gravel, ≥ 2 → path, even on asphalt;
   graymond 18370-19320: a `surface=asphalt` + `mtb:scale=0` road that Valhalla gives as DIRT),
   missing from the tiles like `sac_scale` and `smoothness`.
-- **3 %: `highway=bridleway`**, missing from the tiles (graymond 13850-14540: 690 m of
+- **16 %: `highway=bridleway`**, missing from the tiles (graymond 13850-14540: 690 m of
   `surface=compacted` bridleway that Valhalla sees as GRAVEL, unknown for us).
-- **≈ 12 %: the reference** (Valhalla UNKNOWN where OSM has a surface, or routed elsewhere since an
-  OSM change; the \"excluding Valhalla unknown\" figure removes the former), the rest: the matching
-  (parallel ways: sidewalk versus roadway, service alley versus track).
+- **35 %: the rest**, short stretches: the matching (parallel ways: driveway versus track,
+  footway versus roadway), ways without a surface where the defaults of the kind differ from what
+  Valhalla returns, and OSM edits between Valhalla's data and the tiles'.
 ";
 
 fn pct(a: f64, total: f64) -> String {

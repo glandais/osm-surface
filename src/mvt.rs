@@ -112,6 +112,13 @@ pub struct StreetAttrs {
     pub tunnel: bool,
     pub oneway: bool,
     pub oneway_reverse: bool,
+    /// The tile's `surface` values are all `paved` / `unpaved`: the schema of older VersaTiles
+    /// builds, which reduced the OSM value to its class (current builds keep the raw value).
+    pub surface_reduced: bool,
+    /// The tile follows Shortbread 1.1: `bicycle` / `horse` (with `foot`, `motorcar`) are no
+    /// longer the raw OSM values but `yes` / `limited` / `no`, taken from the first recognized
+    /// tag of a chain ending with `access`.
+    pub access_normalized: bool,
 }
 
 /// One line of the `streets` layer, clipped to its tile, in global units.
@@ -185,12 +192,16 @@ fn decode_layer(layer: &Layer, grid: Grid, tile: &mut StreetTile) {
     let x0 = tile.x as f64 * grid.extent as f64;
     let y0 = tile.y as f64 * grid.extent as f64;
     let bbox = [x0, y0, x0 + grid.extent as f64, y0 + grid.extent as f64];
+    let surface_reduced = surface_reduced(layer);
+    let access_normalized = layer.keys.iter().any(|k| k == "foot" || k == "motorcar");
     let mut interned: HashMap<StreetAttrs, u32> = HashMap::new();
     for f in &layer.features {
         if f.geom_type != Some(GEOM_LINESTRING) {
             continue;
         }
-        let attrs = feature_attrs(layer, f);
+        let mut attrs = feature_attrs(layer, f);
+        attrs.surface_reduced = surface_reduced;
+        attrs.access_normalized = access_normalized;
         let attr = *interned.entry(attrs.clone()).or_insert_with(|| {
             tile.attrs.push(attrs);
             (tile.attrs.len() - 1) as u32
@@ -210,6 +221,28 @@ fn decode_layer(layer: &Layer, grid: Grid, tile: &mut StreetTile) {
             }
         }
     }
+}
+
+/// Whether the layer uses the reduced `surface` schema: it has `surface` values and all of them
+/// are `paved` / `unpaved`. Decided per tile, from the values actually referenced by `surface`.
+fn surface_reduced(layer: &Layer) -> bool {
+    let Some(key) = layer.keys.iter().position(|k| k == "surface") else {
+        return false;
+    };
+    let mut any = false;
+    for f in &layer.features {
+        for pair in f.tags.as_chunks::<2>().0 {
+            if pair[0] as usize != key {
+                continue;
+            }
+            any = true;
+            match layer.values.get(pair[1] as usize).and_then(Value::as_string) {
+                Some(v) if v == "paved" || v == "unpaved" => {}
+                _ => return false,
+            }
+        }
+    }
+    any
 }
 
 fn feature_attrs(layer: &Layer, f: &Feature) -> StreetAttrs {
@@ -394,10 +427,14 @@ mod tests {
             .attrs
             .iter()
             .any(|a| a.kind == "track" && a.tracktype.is_some()));
+        // current schema: the raw OSM surface value
         assert!(tile
             .attrs
             .iter()
-            .any(|a| a.surface.as_deref() == Some("paved")));
+            .any(|a| a.surface.as_deref() == Some("asphalt")));
+        assert!(tile.attrs.iter().all(|a| !a.surface_reduced));
+        // Shortbread 1.1 access attributes
+        assert!(tile.attrs.iter().all(|a| a.access_normalized));
         assert!(tile.attrs.iter().all(|a| !a.kind.is_empty()));
         // every point inside the tile's square, in global units
         let (x0, y0) = (8118.0 * 4096.0, 5742.0 * 4096.0);
@@ -412,6 +449,18 @@ mod tests {
         let again = decode_streets(&gz.finish().unwrap(), grid, 8118, 5742).unwrap();
         assert_eq!(again.lines.len(), tile.lines.len());
         assert_eq!(decode_streets(&[], grid, 1, 1).unwrap().lines.len(), 0);
+    }
+
+    #[test]
+    fn reduced_surface_schema_is_detected() {
+        // the same tile from an older VersaTiles build, `surface` reduced to paved / unpaved
+        let bytes = include_bytes!("../tests/fixtures/reduced/8118-5742.mvt");
+        let tile = decode_streets(bytes, Grid::new(14, 4096), 8118, 5742).unwrap();
+        assert!(tile.attrs.iter().all(|a| a.surface_reduced && !a.access_normalized));
+        assert!(tile
+            .attrs
+            .iter()
+            .all(|a| matches!(a.surface.as_deref(), None | Some("paved") | Some("unpaved"))));
     }
 
     #[test]

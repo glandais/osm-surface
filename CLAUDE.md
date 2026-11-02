@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Rust (axum) drop-in replacement for Valhalla's `trace_attributes` map-matching endpoint
 (<https://valhalla.github.io/valhalla/api/map-matching/>), as consumed by a client that projects
 the answer into surface ranges (`TraceSurfaceComputer`, ported in `src/client.rs`).
-Instead of a Valhalla graph, it reads VersaTiles **Shortbread 1.0** vector tiles (z14, `streets`
-layer), fetched on demand and cached. The response must stay byte-for-byte compatible with what
+Instead of a Valhalla graph, it reads VersaTiles **Shortbread** vector tiles (z14, `streets`
+layer; schema 1.1 with raw `surface` values, older reduced / 1.0 tiles still read), fetched on demand and cached. The response must stay byte-for-byte compatible with what
 the client expects from Valhalla (fields, Valhalla error codes, 503 for transient failures).
 
 The README is the detailed spec (attribute derivation tables, error codes, env
@@ -55,7 +55,9 @@ Request pipeline, orchestrated by `trace::Service` (`src/trace.rs`):
 4. **`mvt.rs`** — hand-written prost MVT decoder, limited to the `streets` layer → `StreetAttrs`.
 5. **`valhalla.rs`** — port of Valhalla's tag → edge derivation (surface, `use`, `road_class`,
    `cycle_lane`, access per costing mode, `ACCESS_RULES` fr/default) applied to the reduced
-   Shortbread attributes. The `unpaved` → gravel/dirt/compacted choices are the service's own
+   Shortbread attributes (raw OSM `surface` values; Shortbread 1.1 `yes`/`limited`/`no` access).
+   On older tiles with `surface` reduced to `paved`/`unpaved` (detected per tile in `mvt.rs`), the
+   `unpaved` → gravel/dirt/compacted choices are the service's own
    heuristics, calibrated with `eval`.
 6. **`network.rs`** — builds the street graph: lines clipped to their tile, nodes recovered from
    coordinates (tiles have no OSM ids), dangling ends at tile borders merged, junction vertices lost
@@ -70,6 +72,8 @@ score the output the way the real client would).
 
 ## Test data
 
+- `tests/fixtures/reduced/` — one tile of an older VersaTiles build (`surface` reduced, Shortbread
+  1.0 access), for the schema detection test.
 - `tests/fixtures/tiles/…` — real z14 tiles (np655 stretch + two sea tiles for error 171), used
   with `offline: true` so tests never touch the network. New fixtures are produced with
   `inspect fixture`.
