@@ -2,7 +2,7 @@
 
 # --- build ---------------------------------------------------------------------------------
 # Pinned (Rust and Debian release) so that the build is reproducible.
-FROM rust:1.99.1-slim-bookworm AS build
+FROM rust:1.100.0-slim-bookworm AS build
 # cmake and clang: aws-lc-sys (the rustls crypto provider) builds C code
 RUN apt-get update \
  && apt-get install -y --no-install-recommends cmake clang pkg-config \
